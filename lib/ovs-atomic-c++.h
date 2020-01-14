@@ -10,6 +10,7 @@
 
 using std::atomic_init;
 
+using std::memory_order;
 using std::memory_order_relaxed;
 using std::memory_order_consume;
 using std::memory_order_acquire;

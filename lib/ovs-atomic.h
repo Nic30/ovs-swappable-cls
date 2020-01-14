@@ -318,6 +318,7 @@
 #include <stdint.h>
 #include "compiler.h"
 #include "util.h"
+#include "config.h"
 
 #define IN_OVS_ATOMIC_H
     #if __CHECKER__
@@ -325,11 +326,11 @@
         #include "ovs-atomic-pthreads.h"
     #elif __has_extension(c_atomic)
         #include "ovs-atomic-clang.h"
-    #elif HAVE_ATOMIC && __cplusplus >= 201103L
+    #elif (HAVE_ATOMIC || HAVE_STDATOMIC_H) && __cplusplus >= 201103L
         #include "ovs-atomic-c++.h"
     #elif HAVE_STDATOMIC_H && !defined(__cplusplus)
         #include "ovs-atomic-c11.h"
-    #elif __GNUC__ >= 5 && !defined(__cplusplus)
+    #elif !HAVE_STDATOMIC_H && __GNUC__ >= 5 && !defined(__cplusplus)
         #error "GCC 5+ should have <stdatomic.h>"
     #elif __GNUC__ >= 5 || (__GNUC__ >= 4 && __GNUC_MINOR__ >= 7)
         #include "ovs-atomic-gcc4.7+.h"
@@ -661,5 +662,4 @@ ovs_refcount_unref_relaxed(struct ovs_refcount *refcount)
     ovs_assert(old_refcount > 0);
     return old_refcount;
 }
-
 #endif /* ovs-atomic.h */
