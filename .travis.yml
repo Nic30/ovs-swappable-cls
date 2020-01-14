@@ -1,7 +1,7 @@
 language: c
 compiler:
   - gcc
-  - clang
+#  - clang
 
 os:
   - linux
@@ -21,10 +21,21 @@ addons:
       - selinux-policy-dev
       - libunbound-dev
       - libunbound-dev:i386
-
+      - boost1.67
+      - ninja-build
+      - python3-pip
+  
 before_install: ./.travis/${TRAVIS_OS_NAME}-prepare.sh
 
-before_script: export PATH=$PATH:$HOME/bin
+before_script:
+  - cd ..
+  - git clone https://github.com/Nic30/pclass-vectorized.git
+  - pushd pclass-vectorized
+  - mkdir -p build/default
+  - meson build/default
+  - popd
+  - cd ovs
+  - export PATH=$PATH:$HOME/bin
 
 env:
   - OPTS="--disable-ssl"
@@ -35,29 +46,30 @@ env:
   - TESTSUITE=1 DPDK=1
   - DPDK_SHARED=1
   - DPDK_SHARED=1 OPTS="--enable-shared"
-  - KERNEL=5.0
+#  - KERNEL=5.0
   - KERNEL=4.20
-  - KERNEL=4.19
-  - KERNEL=4.18
-  - KERNEL=4.17
-  - KERNEL=4.16
-  - KERNEL=4.15
-  - KERNEL=4.14
-  - KERNEL=4.9
-  - KERNEL=4.4
-  - KERNEL=3.19
-  - KERNEL=3.16
+#  - KERNEL=4.19
+#  - KERNEL=4.18
+#  - KERNEL=4.17
+#  - KERNEL=4.16
+#  - KERNEL=4.15
+#  - KERNEL=4.14
+#  - KERNEL=4.9
+#  - KERNEL=4.4
+#  - KERNEL=3.19
+#  - KERNEL=3.16
   - TESTSUITE=1 LIBS=-ljemalloc
 
-matrix:
-  include:
-    - os: osx
-      compiler: clang
-      env: OPTS="--disable-ssl"
+#matrix:
+#  include:
+#    - os: osx
+#      compiler: clang
+#      env: OPTS="--disable-ssl"
+#
+script:
+  ./.travis/${TRAVIS_OS_NAME}-build.sh $OPTS
 
-script: ./.travis/${TRAVIS_OS_NAME}-build.sh $OPTS
-
-notifications:
-  email:
-    recipients:
-      - ovs-build@openvswitch.org
+#notifications:
+#  email:
+#    recipients:
+#      - ovs-build@openvswitch.org
