@@ -99,6 +99,10 @@ OVS_CHECK_DOT
 OVS_CHECK_IF_DL
 OVS_CHECK_STRTOK_R
 OVS_CHECK_LINUX_AF_XDP
+AC_DEFINE([OVS_OF_CLS_TYPE], [pcv_classifier], [name of type of openflow classifier])
+#AC_DEFINE([OVS_OF_CLS_TYPE], [classifier], [name of type of openflow classifier])
+
+
 AC_CHECK_DECLS([sys_siglist], [], [], [[#include <signal.h>]])
 AC_CHECK_DECLS([malloc_trim], [], [], [[#include <malloc.h>]])
 AC_CHECK_MEMBERS([struct stat.st_mtim.tv_nsec, struct stat.st_mtimensec],

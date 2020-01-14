@@ -27,13 +27,18 @@ AM_CPPFLAGS += -I $(top_srcdir)/include
 AM_CPPFLAGS += -I $(top_builddir)/include
 AM_CPPFLAGS += -I $(top_srcdir)/lib
 AM_CPPFLAGS += -I $(top_builddir)/lib
+AM_CPPFLAGS += -I $(top_srcdir)/../pclass-vectorized/include
+AM_LDFLAGS += -L$(top_srcdir)/../pclass-vectorized/build/default/src -lpcv -lstdc++
+
+ARCH_SPEC_CONFIG = -m64 -march=haswell -mavx2
 
 AM_CPPFLAGS += $(SSL_INCLUDES)
+AM_CPPFLAGS += $(ARCH_SPEC_CONFIG)
 
 AM_CFLAGS = -Wstrict-prototypes
 AM_CFLAGS += $(WARNING_FLAGS)
 AM_CFLAGS += $(OVS_CFLAGS)
-
+AM_CFLAGS += $(ARCH_SPEC_CONFIG)
 if DPDK_NETDEV
 AM_CFLAGS += -D_FILE_OFFSET_BITS=64
 DPDKSTRIP_FLAGS = --dpdk
