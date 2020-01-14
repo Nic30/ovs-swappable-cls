@@ -23,7 +23,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "cfm.h"
-#include "classifier.h"
+//##if OVS_OF_CLS_TYPE == classifier
+//#include "classifier.h"
+//#elif OVS_OF_CLS_TYPE == pcv_classifier
+#include "ofproto/pcv/classifier-pcv.h"
+//#else
+//#error "NotImplemented"
+//#endif
 #include "flow.h"
 #include "openvswitch/meta-flow.h"
 #include "netflow.h"

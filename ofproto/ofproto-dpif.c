@@ -1767,7 +1767,7 @@ destruct(struct ofproto *ofproto_, bool del)
                 &ofproto->all_ofproto_dpifs_by_uuid_node);
 
     OFPROTO_FOR_EACH_TABLE (table, &ofproto->up) {
-        CLS_FOR_EACH (rule, up.cr, &table->cls) {
+        PCV_CLS_FOR_EACH (rule, up.cr, &table->cls) {
             ofproto_rule_delete(&ofproto->up, &rule->up);
         }
     }
@@ -4335,8 +4335,8 @@ rule_dpif_lookup_in_table(struct ofproto_dpif *ofproto, ovs_version_t version,
                           uint8_t table_id, struct flow *flow,
                           struct flow_wildcards *wc)
 {
-    struct classifier *cls = &ofproto->up.tables[table_id].cls;
-    return rule_dpif_cast(rule_from_cls_rule(classifier_lookup(cls, version,
+    struct OVS_OF_CLS_TYPE *cls = &ofproto->up.tables[table_id].cls;
+    return rule_dpif_cast(rule_from_cls_rule(pcv_classifier_lookup(cls, version,
                                                                flow, wc)));
 }
 

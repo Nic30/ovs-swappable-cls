@@ -1546,7 +1546,7 @@ ofproto_configure_table(struct ofproto *ofproto, int table_id,
         return;
     }
 
-    if (classifier_set_prefix_fields(&table->cls,
+    if (pcv_classifier_set_prefix_fields(&table->cls,
                                      s->prefix_fields, s->n_prefix_fields)) {
         /* XXX: Trigger revalidation. */
     }
@@ -1595,7 +1595,7 @@ ofproto_rule_delete(struct ofproto *ofproto, struct rule *rule)
         /* Make sure there is no postponed removal of the rule. */
         ovs_assert(cls_rule_visible_in_version(&rule->cr, OVS_VERSION_MAX));
 
-        classifier_remove_assert(&rule->ofproto->tables[rule->table_id].cls,
+        pcv_classifier_remove_assert(&rule->ofproto->tables[rule->table_id].cls,
                                  &rule->cr);
         ofproto_rule_remove__(rule->ofproto, rule);
         if (ofproto->ofproto_class->rule_delete) {
@@ -1636,7 +1636,7 @@ ofproto_flush__(struct ofproto *ofproto, bool del)
 
         rule_collection_init(&rules);
 
-        CLS_FOR_EACH (rule, cr, &table->cls) {
+        PCV_CLS_FOR_EACH (rule, cr, &table->cls) {
             rule_collection_add(&rules, rule);
         }
         delete_flows__(&rules, OFPRR_DELETE, NULL);
@@ -1832,7 +1832,7 @@ ofproto_run(struct ofproto *p)
             }
 
             ovs_mutex_lock(&ofproto_mutex);
-            CLS_FOR_EACH (rule, cr, &table->cls) {
+            PCV_CLS_FOR_EACH (rule, cr, &table->cls) {
                 if (rule->idle_timeout || rule->hard_timeout) {
                     if (!rule->eviction_group) {
                         eviction_group_add_rule(rule);
@@ -2231,7 +2231,7 @@ ofproto_add_flow(struct ofproto *ofproto, const struct match *match,
 
     /* First do a cheap check whether the rule we're looking for already exists
      * with the actions that we want.  If it does, then we're done. */
-    rule = rule_from_cls_rule(classifier_find_match_exactly(
+    rule = rule_from_cls_rule(pcv_classifier_find_match_exactly(
                                   &ofproto->tables[0].cls, match, priority,
                                   OVS_VERSION_MAX));
     if (rule) {
@@ -2272,12 +2272,12 @@ ofproto_delete_flow(struct ofproto *ofproto,
                     const struct match *target, int priority)
     OVS_REQUIRES(ofproto_mutex)
 {
-    struct classifier *cls = &ofproto->tables[0].cls;
+    struct OVS_OF_CLS_TYPE *cls = &ofproto->tables[0].cls;
     struct rule *rule;
 
     /* First do a cheap check whether the rule we're looking for has already
      * been deleted.  If so, then we're done. */
-    rule = rule_from_cls_rule(classifier_find_match_exactly(
+    rule = rule_from_cls_rule(pcv_classifier_find_match_exactly(
                                   cls, target, priority, OVS_VERSION_MAX));
     if (!rule) {
         return;
@@ -2987,7 +2987,7 @@ remove_rule_rcu__(struct rule *rule)
     struct oftable *table = &ofproto->tables[rule->table_id];
 
     ovs_assert(!cls_rule_visible_in_version(&rule->cr, OVS_VERSION_MAX));
-    classifier_remove_assert(&table->cls, &rule->cr);
+    pcv_classifier_remove_assert(&table->cls, &rule->cr);
     if (ofproto->ofproto_class->rule_delete) {
         ofproto->ofproto_class->rule_delete(rule);
     }
@@ -3024,18 +3024,18 @@ remove_rules_rcu(struct rule **rules)
              * until later, so that when removing large number of flows the
              * operation is faster. */
             if (!bitmap_is_set(tables, rule->table_id)) {
-                struct classifier *cls = &ofproto->tables[rule->table_id].cls;
+                struct OVS_OF_CLS_TYPE *cls = &ofproto->tables[rule->table_id].cls;
 
                 bitmap_set1(tables, rule->table_id);
-                classifier_defer(cls);
+                pcv_classifier_defer(cls);
             }
             remove_rule_rcu__(rule);
         }
 
         BITMAP_FOR_EACH_1(table_id, 256, tables) {
-            struct classifier *cls = &ofproto->tables[table_id].cls;
+            struct OVS_OF_CLS_TYPE *cls = &ofproto->tables[table_id].cls;
 
-            classifier_publish(cls);
+            pcv_classifier_publish(cls);
         }
         ovs_mutex_unlock(&ofproto_mutex);
     }
@@ -4548,7 +4548,7 @@ collect_rules_loose(struct ofproto *ofproto,
         FOR_EACH_MATCHING_TABLE (table, criteria->table_id, ofproto) {
             struct rule *rule;
 
-            CLS_FOR_EACH_TARGET (rule, cr, &table->cls, &criteria->cr,
+            PCV_CLS_FOR_EACH_TARGET (rule, cr, &table->cls, &criteria->cr,
                                  criteria->version) {
                 collect_rule(rule, criteria, rules, &n_readonly);
             }
@@ -4604,7 +4604,7 @@ collect_rules_strict(struct ofproto *ofproto,
         FOR_EACH_MATCHING_TABLE (table, criteria->table_id, ofproto) {
             struct rule *rule;
 
-            rule = rule_from_cls_rule(classifier_find_rule_exactly(
+            rule = rule_from_cls_rule(pcv_classifier_find_rule_exactly(
                                           &table->cls, &criteria->cr,
                                           criteria->version));
             if (rule) {
@@ -4768,7 +4768,7 @@ ofproto_get_all_flows(struct ofproto *p, struct ds *results,
     OFPROTO_FOR_EACH_TABLE (table, p) {
         struct rule *rule;
 
-        CLS_FOR_EACH (rule, cr, &table->cls) {
+        PCV_CLS_FOR_EACH (rule, cr, &table->cls) {
             flow_stats_ds(p, rule, results, offload_stats);
         }
     }
@@ -5156,13 +5156,13 @@ add_flow_start(struct ofproto *ofproto, struct ofproto_flow_mod *ofm)
 
     /* Check for the existence of an identical rule.
      * This will not return rules earlier marked for removal. */
-    old_rule = rule_from_cls_rule(classifier_find_rule_exactly(&table->cls,
+    old_rule = rule_from_cls_rule(pcv_classifier_find_rule_exactly(&table->cls,
                                                                &new_rule->cr,
                                                                ofm->version));
     if (!old_rule) {
         /* Check for overlap, if requested. */
         if (new_rule->flags & OFPUTIL_FF_CHECK_OVERLAP
-            && classifier_rule_overlaps(&table->cls, &new_rule->cr,
+            && pcv_classifier_rule_overlaps(&table->cls, &new_rule->cr,
                                         ofm->version)) {
             return OFPERR_OFPFMFC_OVERLAP;
         }
@@ -5330,7 +5330,7 @@ ofproto_flow_mod_init_for_learn(struct ofproto *ofproto,
     struct oftable *table = &ofproto->tables[fm->table_id];
     struct rule *rule;
 
-    rule = rule_from_cls_rule(classifier_find_minimatch_exactly(
+    rule = rule_from_cls_rule(pcv_classifier_find_minimatch_exactly(
                                   &table->cls, &fm->match, fm->priority,
                                   OVS_VERSION_MAX));
     if (rule) {
@@ -5572,7 +5572,7 @@ replace_rule_start(struct ofproto *ofproto, struct ofproto_flow_mod *ofm,
     ofproto_rule_insert__(ofproto, new_rule);
     /* Make the new rule visible for classifier lookups only from the next
      * version. */
-    classifier_insert(&table->cls, &new_rule->cr, ofm->version, ofm->conjs,
+    pcv_classifier_insert(&table->cls, &new_rule->cr, ofm->version, ofm->conjs,
                       ofm->n_conjs);
 }
 
@@ -5599,7 +5599,7 @@ replace_rule_revert(struct ofproto *ofproto,
     }
 
     /* Remove the new rule immediately.  It was never visible to lookups. */
-    classifier_remove_assert(&table->cls, &new_rule->cr);
+    pcv_classifier_remove_assert(&table->cls, &new_rule->cr);
     ofproto_rule_remove__(ofproto, new_rule);
     ofproto_rule_unref(new_rule);
 }
@@ -5627,7 +5627,7 @@ replace_rule_finish(struct ofproto *ofproto, struct ofproto_flow_mod *ofm,
     error = ofproto->ofproto_class->rule_insert(new_rule, replaced_rule,
                                                 ofm->modify_keep_counts);
     if (error) {
-        if (classifier_remove(&table->cls, &new_rule->cr)) {
+        if (pcv_classifier_remove(&table->cls, &new_rule->cr)) {
             ofproto_rule_destroy__(new_rule);
         }
         return error;
@@ -6447,7 +6447,7 @@ ofproto_collect_ofmonitor_refresh_rules(const struct ofmonitor *m,
     FOR_EACH_MATCHING_TABLE (table, m->table_id, ofproto) {
         struct rule *rule;
 
-        CLS_FOR_EACH_TARGET (rule, cr, &table->cls, &target, OVS_VERSION_MAX) {
+        PCV_CLS_FOR_EACH_TARGET (rule, cr, &table->cls, &target, OVS_VERSION_MAX) {
             ofproto_collect_ofmonitor_refresh_rule(m, rule, seqno, rules);
         }
     }
@@ -8973,14 +8973,14 @@ static void
 oftable_init(struct oftable *table)
 {
     memset(table, 0, sizeof *table);
-    classifier_init(&table->cls, flow_segment_u64s);
+    pcv_classifier_init(&table->cls, flow_segment_u64s);
     table->max_flows = UINT_MAX;
     table->n_flows = 0;
     hmap_init(&table->eviction_groups_by_id);
     heap_init(&table->eviction_groups_by_size);
     atomic_init(&table->miss_config, OFPUTIL_TABLE_MISS_DEFAULT);
 
-    classifier_set_prefix_fields(&table->cls, default_prefix_fields,
+    pcv_classifier_set_prefix_fields(&table->cls, default_prefix_fields,
                                  ARRAY_SIZE(default_prefix_fields));
 
     atomic_init(&table->n_matched, 0);
@@ -8993,7 +8993,7 @@ oftable_init(struct oftable *table)
 static void
 oftable_destroy(struct oftable *table)
 {
-    ovs_assert(classifier_is_empty(&table->cls));
+    ovs_assert(pcv_classifier_is_empty(&table->cls));
 
     ovs_mutex_lock(&ofproto_mutex);
     oftable_configure_eviction(table, 0, NULL, 0);
@@ -9001,7 +9001,7 @@ oftable_destroy(struct oftable *table)
 
     hmap_destroy(&table->eviction_groups_by_id);
     heap_destroy(&table->eviction_groups_by_size);
-    classifier_destroy(&table->cls);
+    pcv_classifier_destroy(&table->cls);
     free(table->name);
 }
 
@@ -9099,7 +9099,7 @@ oftable_configure_eviction(struct oftable *table, unsigned int eviction,
     table->eviction = eviction;
     if (table->eviction) {
         table->eviction_group_id_basis = random_uint32();
-        CLS_FOR_EACH (rule, cr, &table->cls) {
+        PCV_CLS_FOR_EACH (rule, cr, &table->cls) {
             eviction_group_add_rule(rule);
         }
     }
