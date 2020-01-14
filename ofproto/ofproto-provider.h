@@ -219,7 +219,7 @@ enum oftable_flags {
  * Refer to the thread-safety notes on struct rule for more information.*/
 struct oftable {
     enum oftable_flags flags;
-    struct classifier cls;      /* Contains "struct rule"s. */
+    struct OVS_OF_CLS_TYPE cls;      /* Contains "struct rule"s. */
     char *name;                 /* Table name exposed via OpenFlow, or NULL. */
     int name_level;             /* 0=name unset, 1=via OF, 2=via OVSDB. */
 
