@@ -20,6 +20,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#ifndef typeof
+#define typeof(x) __typeof__(x)
+#endif
+
 #ifndef __has_feature
   #define __has_feature(x) 0
 #endif
@@ -256,7 +260,7 @@
 #define BUILD_ASSERT(EXPR) ((void) 0)
 #define BUILD_ASSERT_DECL(EXPR) extern int (*build_assert(void))[1]
 #elif defined(__cplusplus) && __cplusplus >= 201103L
-#define BUILD_ASSERT(EXPR) static_assert(EXPR, "assertion failed")
+#define BUILD_ASSERT(EXPR) []{ static_assert(EXPR, "assertion failed"); }
 #define BUILD_ASSERT_DECL(EXPR) static_assert(EXPR, "assertion failed")
 #elif defined(__cplusplus) && __cplusplus < 201103L
 #include <boost/static_assert.hpp>

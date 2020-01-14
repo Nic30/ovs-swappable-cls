@@ -48,7 +48,7 @@ bitmap_n_bytes(size_t n_bits)
 static inline unsigned long *
 bitmap_allocate(size_t n_bits)
 {
-    return xzalloc(bitmap_n_bytes(n_bits));
+    return (unsigned long *)  xzalloc(bitmap_n_bytes(n_bits));
 }
 
 /* Initializes bitmap to all-1-bits and returns the bitmap pointer. */
@@ -70,13 +70,13 @@ bitmap_init1(unsigned long *bitmap, size_t n_bits)
 static inline unsigned long *
 bitmap_allocate1(size_t n_bits)
 {
-    return bitmap_init1(xmalloc(bitmap_n_bytes(n_bits)), n_bits);
+    return bitmap_init1((unsigned long *) xmalloc(bitmap_n_bytes(n_bits)), n_bits);
 }
 
 static inline unsigned long *
 bitmap_clone(const unsigned long *bitmap, size_t n_bits)
 {
-    return xmemdup(bitmap, bitmap_n_bytes(n_bits));
+    return (unsigned long *)  xmemdup(bitmap, bitmap_n_bytes(n_bits));
 }
 
 static inline void
