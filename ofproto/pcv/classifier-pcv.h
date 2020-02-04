@@ -15,7 +15,7 @@ extern "C" {
 
 /* A flow pcv_classifier. */
 struct pcv_classifier {
-	void * priv; /* [TODO] place object data directly in struct, problem: resolve size of cls in C */
+    void * priv; /* [TODO] place object data directly in struct, problem: resolve size of cls in C */
     bool publish;                   /* Make changes visible to lookups? */
 };
 
