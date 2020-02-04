@@ -1,3 +1,9 @@
+#!/bin/bash
+
+# ./boot.sh
+# ./configure --prefix=/usr --localstatedir=/var --sysconfdir=/etc --with-linux=/lib/modules/$(uname -r)/build
+
+
 make -j10
 sudo ovs-vsctl del-br br0 2>/dev/null
 OVS_SCRIPTS=/usr/share/openvswitch/scripts/
@@ -6,9 +12,19 @@ sudo rmmod openvswitch
 
 sudo make install
 sudo make modules_install
+
+# clean logs
+#echo "" > /usr/local/var/log/openvswitch/ovs-vswitchd.log
+#echo "" > /usr/local/var/log/openvswitch/ovsdb-server.log
+echo "" > /var/log/openvswitch/ovs-vswitchd.log
+echo "" > /var/log/openvswitch/ovsdb-server.log
+
 sudo modprobe openvswitch
 UUID="8041392a-6c95-44a6-a5e2-2bfd6a4a86b4"
 sudo $OVS_SCRIPTS/ovs-ctl start --system-id=$UUID
+
+# dissable EMC
+sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:emc-insert-inv-prob=0
 
 # Run command inside network namespace
 as_ns () {
@@ -40,6 +56,7 @@ sudo ovs-vsctl add-br br0 \
 -- set bridge br0 other-config:disable-in-band=true \
 -- set bridge br0 fail_mode=secure \
 -- add-port br0 veth-host1 -- set interface veth-host1 ofport_request=1 \
--- add-port br0 veth-host2 -- set interface veth-host2 ofport_request=2 \
--- set-controller br0 tcp:127.0.0.1:6653 tcp:127.0.0.1:6654
+-- add-port br0 veth-host2 -- set interface veth-host2 ofport_request=2
+
+# -- set-controller br0 tcp:127.0.0.1:6653 tcp:127.0.0.1:6654
 
