@@ -28,7 +28,7 @@ AM_CPPFLAGS += -I $(top_builddir)/include
 AM_CPPFLAGS += -I $(top_srcdir)/lib
 AM_CPPFLAGS += -I $(top_builddir)/lib
 AM_CPPFLAGS += -I $(top_srcdir)/../pclass-vectorized/include
-AM_LDFLAGS += -L$(top_srcdir)/../pclass-vectorized/build/default/src -lpcv -lstdc++
+AM_LDFLAGS += -L$(top_srcdir)/../pclass-vectorized/build/default/src -lpcv -lm -lstdc++
 
 ARCH_SPEC_CONFIG = -m64 -march=haswell -mavx2
 
