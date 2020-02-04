@@ -1,3 +1,4 @@
+#include <config.h>
 #include "classifier-pcv.h"
 
 /* Inserts 'rule' into 'cls'.  Until 'rule' is removed from 'cls', the caller
@@ -7,11 +8,12 @@
  * fixed fields, and priority).  Use pcv_classifier_find_rule_exactly() to find
  * such a rule. */
 void pcv_classifier_insert(struct pcv_classifier *cls, const struct cls_rule *rule,
-		ovs_version_t version, const struct cls_conjunction conj[],
-		size_t n_conj) {
-	const struct cls_rule *displaced_rule = pcv_classifier_replace(cls, rule,
-			version, conj, n_conj);
-	ovs_assert(!displaced_rule);
+        ovs_version_t version, const struct cls_conjunction conj[],
+        size_t n_conj) {
+    printf(">>>>>>>>>>>pcv_classifier_insert/n");
+    const struct cls_rule *displaced_rule = pcv_classifier_replace(cls, rule,
+            version, conj, n_conj);
+    ovs_assert(!displaced_rule);
 }
 
 /* Finds and returns a rule in 'cls' with priority 'priority' and exactly the

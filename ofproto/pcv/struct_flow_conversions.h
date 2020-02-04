@@ -14,37 +14,37 @@ extern typename PcvClassifier::names_t struct_flow_packet_names;
 
 
 inline void flow_to_array(const struct flow * f,
-		const struct flow_wildcards * masks,
-		std::array<pcv::Range1d<uint16_t>, struct_flow_D> & _r) {
-	auto _masks = &masks->masks;
+        const struct flow_wildcards * masks,
+        std::array<pcv::Range1d<uint16_t>, struct_flow_D> & _r) {
+    auto _masks = &masks->masks;
 
-	uint16_t i = 0;
-	for (auto spec : struct_flow_packet_spec) {
-		auto _v =
-				reinterpret_cast<const uint16_t*>(&reinterpret_cast<const uint8_t*>(f)[spec.offset]);
-		auto _m =
-				reinterpret_cast<const uint16_t*>(&reinterpret_cast<const uint8_t*>(_masks)[spec.offset]);
-		uint16_t v, m;
+    uint16_t i = 0;
+    for (auto spec : struct_flow_packet_spec) {
+        auto _v =
+                reinterpret_cast<const uint16_t*>(&reinterpret_cast<const uint8_t*>(f)[spec.offset]);
+        auto _m =
+                reinterpret_cast<const uint16_t*>(&reinterpret_cast<const uint8_t*>(_masks)[spec.offset]);
+        uint16_t v, m;
 
-		if (spec.is_big_endian) {
-			assert(spec.size == 2);
-			v = __swab16p(_v);
-			m = __swab16p(_m);
-		} else {
-			v = *_v;
-			m = *_m;
-		}
+        if (spec.is_big_endian) {
+            assert(spec.size == 2);
+            v = __swab16p(_v);
+            m = __swab16p(_m);
+        } else {
+            v = *_v;
+            m = *_m;
+        }
 
-		if (spec.size == 1) {
-			v &= 0xff;
-			m &= 0xff;
-			if (m == 0) {
-				// to let the classifier known that this field is ignored
-				v = 0;
-			}
-		}
-		_r[i] = pcv::Range1d<uint16_t>::from_mask(v, m);
-		i++;
-	}
+        if (spec.size == 1) {
+            v &= 0xff;
+            m &= 0xff;
+            if (m == 0) {
+                // to let the classifier known that this field is ignored
+                v = 0;
+            }
+        }
+        _r[i] = pcv::Range1d<uint16_t>::from_mask(v, m);
+        i++;
+    }
 }
 
