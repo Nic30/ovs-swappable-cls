@@ -4,14 +4,14 @@
 # ./configure --prefix=/usr --localstatedir=/var --sysconfdir=/etc --with-linux=/lib/modules/$(uname -r)/build
 
 
-make -j10
+make -j10  || exit 1
 sudo ovs-vsctl del-br br0 2>/dev/null
 OVS_SCRIPTS=/usr/share/openvswitch/scripts/
 sudo $OVS_SCRIPTS/ovs-ctl stop
 sudo rmmod openvswitch
 
-sudo make install
-sudo make modules_install
+sudo make install || exit 1
+sudo make modules_install || exit 1
 
 # clean logs
 #echo "" > /usr/local/var/log/openvswitch/ovs-vswitchd.log
@@ -19,12 +19,12 @@ sudo make modules_install
 echo "" > /var/log/openvswitch/ovs-vswitchd.log
 echo "" > /var/log/openvswitch/ovsdb-server.log
 
-sudo modprobe openvswitch
+sudo modprobe openvswitch  || exit 1
 UUID="8041392a-6c95-44a6-a5e2-2bfd6a4a86b4"
-sudo $OVS_SCRIPTS/ovs-ctl start --system-id=$UUID
+sudo $OVS_SCRIPTS/ovs-ctl start --system-id=$UUID  || exit 1
 
 # dissable EMC
-sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:emc-insert-inv-prob=0
+sudo ovs-vsctl --no-wait set Open_vSwitch . other_config:emc-insert-inv-prob=0  || exit 1
 
 # Run command inside network namespace
 as_ns () {
