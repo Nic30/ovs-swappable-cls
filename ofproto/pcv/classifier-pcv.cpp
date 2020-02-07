@@ -15,7 +15,7 @@ pcv_classifier_priv::pcv_classifier_priv() :
 }
 
 void pcv_classifier_init(struct pcv_classifier *cls, const uint8_t *flow_segments) {
-    ovs_assert(flow_segments == nullptr && "not implemented");
+    // ovs_assert(flow_segments == nullptr && "not implemented");
     cls->priv = new pcv_classifier_priv();
     cls->publish = true;
 }
@@ -108,7 +108,7 @@ const struct cls_rule *
 pcv_classifier_lookup(const struct pcv_classifier *_cls,
         ovs_version_t version __attribute__((unused)), struct flow *flow,
         struct flow_wildcards *wc) {
-    ovs_assert(wc == nullptr);
+    // ovs_assert(wc == nullptr);
     auto p = ((pcv_classifier_priv*) _cls->priv);
     auto tmp = reinterpret_cast<const uint8_t*>(flow);
     auto res = p->cls.search<const uint8_t*>(tmp);
