@@ -25,13 +25,14 @@
 DPDK Bridges
 ============
 
-The DPDK datapath requires specially configured bridge(s) in order to utilize
-DPDK-backed :doc:`physical <phy>` and :doc:`virtual <vhost-user>` ports.
+Bridge must be specially configured to utilize DPDK-backed
+:doc:`physical <phy>` and :doc:`virtual <vhost-user>` ports.
 
 Quick Example
 -------------
 
-This example demonstrates how to add a bridge using the DPDK datapath::
+This example demonstrates how to add a bridge that will take advantage
+of DPDK::
 
     $ ovs-vsctl add-br br0 -- set bridge br0 datapath_type=netdev
 
@@ -73,6 +74,12 @@ You can also query the port statistics by explicitly specifying the ``-O
 OpenFlow14`` option::
 
     $ ovs-ofctl -O OpenFlow14 dump-ports br0
+
+There are custom statistics that OVS accumulates itself and these stats has
+``ovs_`` as prefix. These custom stats are shown along with other stats
+using the following command::
+
+    $ ovs-vsctl get Interface <iface> statistics
 
 EMC Insertion Probability
 -------------------------

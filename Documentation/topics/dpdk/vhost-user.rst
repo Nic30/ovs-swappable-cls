@@ -25,9 +25,9 @@
 DPDK vHost User Ports
 =====================
 
-The DPDK datapath provides DPDK-backed vHost user ports as a primary way to
-interact with guests. For more information on vHost User, refer to the `QEMU
-documentation`_ on same.
+OVS userspace switching supports supports vHost user ports as a
+primary way to interact with guests.  For more information on vHost
+User, refer to the `QEMU documentation`_ on same.
 
 .. important::
 
@@ -348,8 +348,6 @@ The default value is ``false``.
     across a 10Gbps link possibly unacceptably slow. So recommended hugepage
     size is 2MB.
 
-.. _dpdk-testpmd:
-
 vhost-user-client tx retries config
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -375,6 +373,8 @@ Tx retries max can be set for vhost-user-client ports::
 
   Configurable vhost tx retries are not supported with vhost-user ports.
 
+.. _dpdk-testpmd:
+
 DPDK in the Guest
 -----------------
 
@@ -392,9 +392,9 @@ To begin, instantiate a guest as described in :ref:`dpdk-vhost-user` or
 DPDK sources to VM and build DPDK::
 
     $ cd /root/dpdk/
-    $ wget http://fast.dpdk.org/rel/dpdk-18.11.2.tar.xz
-    $ tar xf dpdk-18.11.2.tar.xz
-    $ export DPDK_DIR=/root/dpdk/dpdk-stable-18.11.2
+    $ wget https://fast.dpdk.org/rel/dpdk-19.11.tar.xz
+    $ tar xf dpdk-19.11.tar.xz
+    $ export DPDK_DIR=/root/dpdk/dpdk-19.11
     $ export DPDK_TARGET=x86_64-native-linuxapp-gcc
     $ export DPDK_BUILD=$DPDK_DIR/$DPDK_TARGET
     $ cd $DPDK_DIR
@@ -551,7 +551,7 @@ processing packets at the required rate.
 The amount of Tx retries on a vhost-user or vhost-user-client interface can be
 shown with::
 
-  $ ovs-vsctl get Interface dpdkvhostclient0 statistics:tx_retries
+  $ ovs-vsctl get Interface dpdkvhostclient0 statistics:ovs_tx_retries
 
 vhost-user Dequeue Zero Copy (experimental)
 -------------------------------------------
@@ -622,4 +622,4 @@ Because of this limitation, this feature is considered 'experimental'.
 
 Further information can be found in the
 `DPDK documentation
-<https://doc.dpdk.org/guides-18.11/prog_guide/vhost_lib.html>`__
+<https://doc.dpdk.org/guides-19.11/prog_guide/vhost_lib.html>`__

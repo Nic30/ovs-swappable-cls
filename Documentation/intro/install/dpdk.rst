@@ -42,7 +42,7 @@ Build requirements
 In addition to the requirements described in :doc:`general`, building Open
 vSwitch with DPDK will require the following:
 
-- DPDK 18.11.2
+- DPDK 19.11
 
 - A `DPDK supported NIC`_
 
@@ -71,9 +71,9 @@ Install DPDK
 #. Download the `DPDK sources`_, extract the file and set ``DPDK_DIR``::
 
        $ cd /usr/src/
-       $ wget http://fast.dpdk.org/rel/dpdk-18.11.2.tar.xz
-       $ tar xf dpdk-18.11.2.tar.xz
-       $ export DPDK_DIR=/usr/src/dpdk-stable-18.11.2
+       $ wget https://fast.dpdk.org/rel/dpdk-19.11.tar.xz
+       $ tar xf dpdk-19.11.tar.xz
+       $ export DPDK_DIR=/usr/src/dpdk-19.11
        $ cd $DPDK_DIR
 
 #. (Optional) Configure DPDK as a shared library
@@ -107,8 +107,8 @@ Install DPDK
 Install OVS
 ~~~~~~~~~~~
 
-OVS can be installed using different methods. For OVS to use DPDK datapath, it
-has to be configured with DPDK support (``--with-dpdk``).
+OVS can be installed using different methods.  For OVS to use DPDK, it
+has to be configured to build against the DPDK library (``--with-dpdk``).
 
 .. note::
   This section focuses on generic recipe that suits most cases. For
@@ -288,7 +288,7 @@ with either the ovs-vswitchd logs, or by running either of the commands::
   "DPDK 17.11.0"
 
 At this point you can use ovs-vsctl to set up bridges and other Open vSwitch
-features. Seeing as we've configured the DPDK datapath, we will use DPDK-type
+features. Seeing as we've configured DPDK support, we will use DPDK-type
 ports. For example, to create a userspace bridge named ``br0`` and add two
 ``dpdk`` ports to it, run::
 
@@ -673,7 +673,7 @@ Limitations
   release notes`_.
 
 .. _DPDK release notes:
-   https://doc.dpdk.org/guides/rel_notes/release_18_11.html
+   https://doc.dpdk.org/guides-19.11/rel_notes/release_19_11.html
 
 - Upper bound MTU: DPDK device drivers differ in how the L2 frame for a
   given MTU value is calculated e.g. i40e driver includes 2 x vlan headers in

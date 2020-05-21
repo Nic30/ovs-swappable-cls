@@ -1026,7 +1026,7 @@ sflow_read_set_action(const struct nlattr *attr,
                 sflow_actions->tunnel.ip_tos = key->ipv4_tos;
             }
             if (key->ipv4_ttl) {
-                sflow_actions->tunnel.ip_tos = key->ipv4_ttl;
+                sflow_actions->tunnel.ip_ttl = key->ipv4_ttl;
             }
         }
         break;
@@ -1224,6 +1224,7 @@ dpif_sflow_read_actions(const struct flow *flow,
         case OVS_ACTION_ATTR_POP_NSH:
         case OVS_ACTION_ATTR_UNSPEC:
         case OVS_ACTION_ATTR_CHECK_PKT_LEN:
+        case OVS_ACTION_ATTR_DROP:
         case __OVS_ACTION_ATTR_MAX:
         default:
             break;

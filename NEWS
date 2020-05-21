@@ -1,3 +1,52 @@
+v2.13.1 - xx xxx xxxx
+---------------------
+
+v2.13.0 - 14 Feb 2020
+---------------------
+   - OVN:
+     * OVN has been removed from this repository. It now exists as a
+       separate project. You can find it at
+       https://github.com/ovn-org/ovn.git
+   - Userspace datapath:
+     * Add option to enable, disable and query TCP sequence checking in
+       conntrack.
+     * Add support for conntrack zone limits.
+     * Command "ovs-appctl dpctl/dump-flows" refactored to show subtable
+       miniflow bits for userspace datapath.
+   - AF_XDP:
+     * New option 'use-need-wakeup' for netdev-afxdp to control enabling
+       of corresponding 'need_wakeup' flag in AF_XDP rings.  Enabled by default
+       if supported by libbpf.
+     * 'xdpmode' option for netdev-afxdp renamed to 'xdp-mode'.
+       Modes also updated.  New values:
+         native-with-zerocopy  - former DRV
+         native                - new one, DRV without zero-copy
+         generic               - former SKB
+         best-effort [default] - new one, chooses the best available from
+                                 3 above modes
+   - DPDK:
+     * DPDK pdump packet capture support disabled by default. New configure
+       option '--enable-dpdk-pdump' to enable it.
+     * DPDK pdump support is deprecated and will be removed in next releases.
+     * DPDK ring ports (dpdkr) are deprecated and will be removed in next
+       releases.
+     * Add support for DPDK 19.11.
+     * Add hardware offload support for output, drop, set of MAC, IPv4 and
+       TCP/UDP ports actions (experimental).
+     * Add experimental support for TSO.
+   - RSTP:
+     * The rstp_statistics column in Port table will only be updated every
+       stats-update-interval configured in Open_vSwitch table.
+   - OVSDB:
+     * When ovsdb-server is running in backup mode, the default value of probe
+       interval is increased to 60 seconds for the connection to the
+       replication server. This value is configurable with the unixctl
+       command - ovsdb-server/set-active-ovsdb-server-probe-interval.
+     * ovsdb-server: New OVSDB extension to allow clients to specify row UUIDs.
+   - 'ovs-appctl dpctl/dump-flows' can now show offloaded=partial for
+     partially offloaded flows, dp:dpdk for fully offloaded by dpdk, and
+     type filter supports new filters: "dpdk" and "partially-offloaded".
+
 v2.12.0 - 03 Sep 2019
 ---------------------
    - DPDK:
@@ -45,6 +94,9 @@ v2.12.0 - 03 Sep 2019
        quickly after a brief disconnection, saving bandwidth and CPU time.
        See section 4.1.15 of ovsdb-server(7) for details of related OVSDB
        protocol extension.
+     * Support to convert from cluster database to standalone database is now
+       available when clustered is down and cannot be revived using ovsdb-tool
+       . Check "Database Migration Commands" in ovsdb-tool man section.
    - OVN:
      * IPAM/MACAM:
        - select IPAM mac_prefix in a random manner if not provided by the user
@@ -60,14 +112,17 @@ v2.12.0 - 03 Sep 2019
        logical groups which results in tunnels only been formed between
        members of the same transport zone(s).
      * Support for IGMP Snooping and IGMP Querier.
-     * Support for new logical switch port type - 'virtual'.
    - New QoS type "linux-netem" on Linux.
    - Added support for TLS Server Name Indication (SNI).
    - Linux datapath:
      * Support for the kernel versions 4.19.x and 4.20.x.
      * Support for the kernel version 5.0.x.
+     * Add support for conntrack zone-based timeout policy.
    - 'ovs-dpctl dump-flows' is no longer suitable for dumping offloaded flows.
      'ovs-appctl dpctl/dump-flows' should be used instead.
+   - Add new argument '--offload-stats' for command
+     'ovs-appctl bridge/dump-flows',
+     so it can display offloaded packets statistics.
    - Add L2 GRE tunnel over IPv6 support.
 
 v2.11.0 - 19 Feb 2019

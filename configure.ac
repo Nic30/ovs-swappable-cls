@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.63)
-AC_INIT(openvswitch, 2.12.0, bugs@openvswitch.org)
+AC_INIT(openvswitch, 2.13.1, bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -92,9 +92,7 @@ OVS_CHECK_NETLINK
 OVS_CHECK_OPENSSL
 OVS_CHECK_LIBCAPNG
 OVS_CHECK_LOGDIR
-OVS_CHECK_PYTHON2
 OVS_CHECK_PYTHON3
-OVS_CHECK_PYTHON
 OVS_CHECK_FLAKE8
 OVS_CHECK_SPHINX
 OVS_CHECK_DOT
@@ -143,6 +141,7 @@ OVS_LIBTOOL_VERSIONS
 OVS_CHECK_CXX
 AX_FUNC_POSIX_MEMALIGN
 OVS_CHECK_UNBOUND
+OVS_CHECK_UNWIND
 
 OVS_CHECK_INCLUDE_NEXT([stdio.h string.h])
 AC_CONFIG_FILES([
@@ -152,7 +151,6 @@ AC_CONFIG_FILES([
     ofproto/libofproto.sym
     lib/libsflow.sym
     lib/libopenvswitch.sym
-    ovn/lib/libovn.sym
     vtep/libvtep.sym])
 
 OVS_ENABLE_OPTION([-Wall])
@@ -191,6 +189,7 @@ OVS_CTAGS_IDENTIFIERS
 AC_ARG_VAR(KARCH, [Kernel Architecture String])
 AC_SUBST(KARCH)
 OVS_CHECK_LINUX
+OVS_CHECK_LINUX_NETLINK
 OVS_CHECK_LINUX_TC
 OVS_CHECK_LINUX_SCTP_CT
 OVS_CHECK_DPDK
@@ -214,8 +213,6 @@ dnl This makes sure that include/openflow gets created in the build directory.
 AC_CONFIG_COMMANDS([include/openflow/openflow.h.stamp])
 
 AC_CONFIG_COMMANDS([utilities/bugtool/dummy], [:])
-AC_CONFIG_COMMANDS([ovn/dummy], [:])
-AC_CONFIG_COMMANDS([ovn/utilities/dummy], [:])
 AC_CONFIG_COMMANDS([ipsec/dummy], [:])
 
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES])

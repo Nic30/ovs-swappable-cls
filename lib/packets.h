@@ -35,6 +35,7 @@
 #include "timeval.h"
 
 struct dp_packet;
+struct conn;
 struct ds;
 
 /* Purely internal to OVS userspace. These flags should never be exposed to
@@ -108,6 +109,9 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
     uint32_t ct_mark;           /* Connection mark. */
     ovs_u128 ct_label;          /* Connection label. */
     union flow_in_port in_port; /* Input port. */
+    struct conn *conn;          /* Cached conntrack connection. */
+    bool reply;                 /* True if reply direction. */
+    bool icmp_related;          /* True if ICMP related. */
 );
 
 PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline1,
@@ -140,6 +144,12 @@ pkt_metadata_init_tnl(struct pkt_metadata *md)
 }
 
 static inline void
+pkt_metadata_init_conn(struct pkt_metadata *md)
+{
+    md->conn = NULL;
+}
+
+static inline void
 pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
 {
     /* This is called for every packet in userspace datapath and affects
@@ -157,6 +167,7 @@ pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
     md->tunnel.ip_dst = 0;
     md->tunnel.ipv6_dst = in6addr_any;
     md->in_port.odp_port = port;
+    md->conn = NULL;
 }
 
 /* This function prefetches the cachelines touched by pkt_metadata_init()
@@ -574,6 +585,30 @@ mpls_lse_to_ttl(ovs_be32 mpls_lse)
     return (ntohl(mpls_lse) & MPLS_TTL_MASK) >> MPLS_TTL_SHIFT;
 }
 
+/* Set label in mpls lse. */
+static inline void
+flow_set_mpls_lse_label(ovs_be32 *mpls_lse, uint32_t label)
+{
+    *mpls_lse &= ~htonl(MPLS_LABEL_MASK);
+    *mpls_lse |= htonl(label << MPLS_LABEL_SHIFT);
+}
+
+/* Set TC in mpls lse. */
+static inline void
+flow_set_mpls_lse_tc(ovs_be32 *mpls_lse, uint8_t tc)
+{
+    *mpls_lse &= ~htonl(MPLS_TC_MASK);
+    *mpls_lse |= htonl((tc & 0x7) << MPLS_TC_SHIFT);
+}
+
+/* Set BOS in mpls lse. */
+static inline void
+flow_set_mpls_lse_bos(ovs_be32 *mpls_lse, uint8_t bos)
+{
+    *mpls_lse &= ~htonl(MPLS_BOS_MASK);
+    *mpls_lse |= htonl((bos & 0x1) << MPLS_BOS_SHIFT);
+}
+
 /* Set TTL in mpls lse. */
 static inline void
 flow_set_mpls_lse_ttl(ovs_be32 *mpls_lse, uint8_t ttl)
@@ -961,12 +996,16 @@ struct icmp6_header {
 };
 BUILD_ASSERT_DECL(ICMP6_HEADER_LEN == sizeof(struct icmp6_header));
 
-#define ICMP6_ERROR_HEADER_LEN 8
-struct icmp6_error_header {
+#define ICMP6_DATA_HEADER_LEN 8
+struct icmp6_data_header {
     struct icmp6_header icmp6_base;
-    ovs_be32 icmp6_error_ext;
+    union {
+        ovs_16aligned_be32 be32[1];
+        ovs_be16           be16[2];
+        uint8_t            u8[4];
+    } icmp6_data;
 };
-BUILD_ASSERT_DECL(ICMP6_ERROR_HEADER_LEN == sizeof(struct icmp6_error_header));
+BUILD_ASSERT_DECL(ICMP6_DATA_HEADER_LEN == sizeof(struct icmp6_data_header));
 
 uint32_t packet_csum_pseudoheader6(const struct ovs_16aligned_ip6_hdr *);
 ovs_be16 packet_csum_upperlayer6(const struct ovs_16aligned_ip6_hdr *,
@@ -1566,6 +1605,9 @@ void packet_set_igmp3_query(struct dp_packet *, uint8_t max_resp,
                             uint8_t qqic);
 void packet_format_tcp_flags(struct ds *, uint16_t);
 const char *packet_tcp_flag_to_string(uint32_t flag);
+void *compose_ipv6(struct dp_packet *packet, uint8_t proto,
+                   const struct in6_addr *src, const struct in6_addr *dst,
+                   uint8_t key_tc, ovs_be32 key_fl, uint8_t key_hl, int size);
 void compose_arp__(struct dp_packet *);
 void compose_arp(struct dp_packet *, uint16_t arp_op,
                  const struct eth_addr arp_sha,

@@ -817,6 +817,10 @@ bond_check_admissibility(struct bond *bond, const void *slave_,
          * When may_enable is TRUE, it means LACP is UP and waiting for the
          * main thread to run LACP state machine and enable the slave. */
         verdict = (slave->enabled || slave->may_enable) ? BV_ACCEPT : BV_DROP;
+        if (!slave->enabled && slave->may_enable) {
+            VLOG_DBG_RL(&rl, "bond %s: slave %s: main thread not yet enabled slave",
+                         bond->name, bond->active_slave->name);
+        }
         goto out;
     case LACP_CONFIGURED:
         if (!bond->lacp_fallback_ab) {
@@ -946,13 +950,12 @@ bond_recirculation_account(struct bond *bond)
         struct rule *rule = entry->pr_rule;
 
         if (rule) {
-            uint64_t n_packets OVS_UNUSED;
+            struct pkt_stats stats;
             long long int used OVS_UNUSED;
-            uint64_t n_bytes;
 
             rule->ofproto->ofproto_class->rule_get_stats(
-                rule, &n_packets, &n_bytes, &used);
-            bond_entry_account(entry, n_bytes);
+                rule, &stats, &used);
+            bond_entry_account(entry, stats.n_bytes);
         }
     }
 }

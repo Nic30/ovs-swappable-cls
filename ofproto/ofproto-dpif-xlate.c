@@ -445,6 +445,12 @@ const char *xlate_strerror(enum xlate_error error)
         return "Invalid tunnel metadata";
     case XLATE_UNSUPPORTED_PACKET_TYPE:
         return "Unsupported packet type";
+    case XLATE_CONGESTION_DROP:
+        return "Congestion Drop";
+    case XLATE_FORWARDING_DISABLED:
+        return "Forwarding is disabled";
+    case XLATE_MAX:
+        break;
     }
     return "Unknown error";
 }
@@ -1510,14 +1516,31 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
             return NULL;
         }
 
-        /* If recirculation was initiated due to bond (in_port = OFPP_NONE)
-         * then frozen state is static and xport_uuid is not defined, so xport
-         * cannot be restored from frozen state. */
-        if (recirc_id_node->state.metadata.in_port != OFPP_NONE) {
+        ofp_port_t in_port = recirc_id_node->state.metadata.in_port;
+        if (in_port != OFPP_NONE && in_port != OFPP_CONTROLLER) {
             struct uuid xport_uuid = recirc_id_node->state.xport_uuid;
             xport = xport_lookup_by_uuid(xcfg, &xport_uuid);
             if (xport && xport->xbridge && xport->xbridge->ofproto) {
                 goto out;
+            }
+        } else {
+            /* OFPP_NONE and OFPP_CONTROLLER are not real ports.  They indicate
+             * that the packet originated from the controller via an OpenFlow
+             * "packet-out".  The right thing to do is to find just the
+             * ofproto.  There is no xport, which is OK.
+             *
+             * OFPP_NONE can also indicate that a bond caused recirculation. */
+            struct uuid uuid = recirc_id_node->state.ofproto_uuid;
+            const struct xbridge *bridge = xbridge_lookup_by_uuid(xcfg, &uuid);
+            if (bridge && bridge->ofproto) {
+                if (errorp) {
+                    *errorp = NULL;
+                }
+                *xportp = NULL;
+                if (ofp_in_port) {
+                    *ofp_in_port = in_port;
+                }
+                return bridge->ofproto;
             }
         }
     }
@@ -3118,6 +3141,13 @@ xlate_normal(struct xlate_ctx *ctx)
 
         if (mac_port) {
             struct xbundle *mac_xbundle = xbundle_lookup(ctx->xcfg, mac_port);
+
+            if (mac_xbundle && xbundle_mirror_out(ctx->xbridge, mac_xbundle)) {
+                xlate_report(ctx, OFT_WARN,
+                             "learned port is a mirror port, dropping");
+                return;
+            }
+
             if (mac_xbundle
                 && mac_xbundle != in_xbundle
                 && mac_xbundle->ofbundle != in_xbundle->ofbundle) {
@@ -3410,6 +3440,19 @@ tnl_route_lookup_flow(const struct xlate_ctx *ctx,
             }
         }
     }
+
+    /* If tunnel IP isn't configured on bridges, then we search all ports. */
+    HMAP_FOR_EACH (xbridge, hmap_node, &ctx->xcfg->xbridges) {
+        struct xport *port;
+
+        HMAP_FOR_EACH (port, ofp_node, &xbridge->xports) {
+            if (!strncmp(netdev_get_name(port->netdev),
+                         out_dev, IFNAMSIZ)) {
+                *out_port = port;
+                return 0;
+            }
+        }
+    }
     return -ENOENT;
 }
 
@@ -3684,7 +3727,7 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
          */
         if (backup_resubmit_stats) {
             struct dpif_flow_stats stats = *backup_resubmit_stats;
-            xlate_push_stats(ctx->xin->xcache, &stats);
+            xlate_push_stats(ctx->xin->xcache, &stats, false);
         }
         xlate_cache_steal_entries(backup_xcache, ctx->xin->xcache);
 
@@ -3972,6 +4015,16 @@ is_nd_dst_correct(const struct flow *flow, const struct in6_addr *ipv6_addr)
             IN6_ARE_ADDR_EQUAL(&flow->ipv6_dst, ipv6_addr);
 }
 
+static bool
+is_neighbor_reply_matched(const struct flow *flow, struct in6_addr *ip_addr)
+{
+    return ((IN6_IS_ADDR_V4MAPPED(ip_addr) &&
+             flow->dl_type == htons(ETH_TYPE_ARP) &&
+             in6_addr_get_mapped_ipv4(ip_addr) == flow->nw_dst) ||
+            (!IN6_IS_ADDR_V4MAPPED(ip_addr) &&
+              is_nd_dst_correct(flow, ip_addr)));
+}
+
 /* Function verifies if the ARP reply or Neighbor Advertisement represented by
  * 'flow' addresses the 'xbridge' of 'ctx'. Returns true if the ARP TA or
  * neighbor discovery destination is in the list of configured IP addresses of
@@ -3986,11 +4039,7 @@ is_neighbor_reply_correct(const struct xlate_ctx *ctx, const struct flow *flow)
     /* Verify if 'nw_dst' of ARP or 'ipv6_dst' of ICMPV6 is in the list. */
     for (i = 0; xbridge_addr && i < xbridge_addr->n_addr; i++) {
         struct in6_addr *ip_addr = &xbridge_addr->addr[i];
-        if ((IN6_IS_ADDR_V4MAPPED(ip_addr) &&
-             flow->dl_type == htons(ETH_TYPE_ARP) &&
-             in6_addr_get_mapped_ipv4(ip_addr) == flow->nw_dst) ||
-            (!IN6_IS_ADDR_V4MAPPED(ip_addr) &&
-              is_nd_dst_correct(flow, ip_addr))) {
+        if (is_neighbor_reply_matched(flow, ip_addr)) {
             /* Found a match. */
             ret = true;
             break;
@@ -3998,20 +4047,39 @@ is_neighbor_reply_correct(const struct xlate_ctx *ctx, const struct flow *flow)
     }
 
     xbridge_addr_unref(xbridge_addr);
+
+    /* If not found in bridge's IPs, search in its ports. */
+    if (!ret) {
+        struct in6_addr *ip_addr, *mask;
+        struct xport *port;
+        int error, n_in6;
+
+        HMAP_FOR_EACH (port, ofp_node, &ctx->xbridge->xports) {
+            error = netdev_get_addr_list(port->netdev, &ip_addr,
+                                         &mask, &n_in6);
+            if (!error) {
+                ret = is_neighbor_reply_matched(flow, ip_addr);
+                free(ip_addr);
+                free(mask);
+                if (ret) {
+                   /* Found a match. */
+                   break;
+                }
+            }
+        }
+    }
     return ret;
 }
 
 static bool
-terminate_native_tunnel(struct xlate_ctx *ctx, ofp_port_t ofp_port,
-                        struct flow *flow, struct flow_wildcards *wc,
-                        odp_port_t *tnl_port)
+terminate_native_tunnel(struct xlate_ctx *ctx, struct flow *flow,
+                        struct flow_wildcards *wc, odp_port_t *tnl_port)
 {
     *tnl_port = ODPP_NONE;
 
     /* XXX: Write better Filter for tunnel port. We can use in_port
      * in tunnel-port flow to avoid these checks completely. */
-    if (ofp_port == OFPP_LOCAL &&
-        ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) {
+    if (ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) {
         *tnl_port = tnl_port_map_lookup(flow, wc);
 
         /* If no tunnel port was found and it's about an ARP or ICMPv6 packet,
@@ -4155,7 +4223,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             native_tunnel_output(ctx, xport, flow, odp_port, truncate);
             flow->tunnel = flow_tnl; /* Restore tunnel metadata */
 
-        } else if (terminate_native_tunnel(ctx, ofp_port, flow, wc,
+        } else if (terminate_native_tunnel(ctx, flow, wc,
                                            &odp_tnl_port)) {
             /* Intercept packet to be received on native tunnel port. */
             nl_msg_put_odp_port(ctx->odp_actions, OVS_ACTION_ATTR_TUNNEL_POP,
@@ -4225,7 +4293,7 @@ xlate_recursively(struct xlate_ctx *ctx, struct rule_dpif *rule,
     const struct rule_actions *actions;
 
     if (ctx->xin->resubmit_stats) {
-        rule_dpif_credit_stats(rule, ctx->xin->resubmit_stats);
+        rule_dpif_credit_stats(rule, ctx->xin->resubmit_stats, false);
     }
 
     ctx->resubmits++;
@@ -4331,6 +4399,7 @@ xlate_table_action(struct xlate_ctx *ctx, ofp_port_t in_port, uint8_t table_id,
                 !is_ip_any(&ctx->xin->flow)) {
                 xlate_report_error(ctx,
                                    "resubmit(ct) with non-tracked or non-IP packet!");
+                ctx->table_id = old_table_id;
                 return;
             }
             tuple_swap(&ctx->xin->flow, ctx->wc);
@@ -4430,11 +4499,11 @@ xlate_group_bucket(struct xlate_ctx *ctx, struct ofputil_bucket *bucket,
      *
      * Note that group buckets are action sets, hence they cannot modify the
      * main action set.  Also any stack actions are ignored when executing an
-     * action set, so group buckets cannot change the stack either.
+     * action set, so group buckets cannot directly change the stack either.
      * However, we do allow resubmit actions in group buckets, which could
-     * break the above assumptions.  It is up to the controller to not mess up
-     * with the action_set and stack in the tables resubmitted to from
-     * group buckets. */
+     * recursively execute actions that do modify the action set or change the
+     * stack.  The controller must be careful about what it does to the
+     * action_set and stack in the tables resubmitted to from group buckets. */
     ctx->xin->flow = old_flow;
 
     /* The group bucket popping MPLS should have no effect after bucket
@@ -4771,6 +4840,7 @@ xlate_controller_action(struct xlate_ctx *ctx, int len,
         .stack_size = ctx->stack.size,
         .mirrors = ctx->mirrors,
         .conntracked = ctx->conntracked,
+        .was_mpls = ctx->was_mpls,
         .ofpacts = NULL,
         .ofpacts_len = 0,
         .action_set = NULL,
@@ -4845,6 +4915,7 @@ finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
         .stack_size = ctx->stack.size,
         .mirrors = ctx->mirrors,
         .conntracked = ctx->conntracked,
+        .was_mpls = ctx->was_mpls,
         .xport_uuid = ctx->xin->xport_uuid,
         .ofpacts = ctx->frozen_actions.data,
         .ofpacts_len = ctx->frozen_actions.size,
@@ -5962,6 +6033,12 @@ put_ct_label(const struct flow *flow, struct ofpbuf *odp_actions,
 }
 
 static void
+put_drop_action(struct ofpbuf *odp_actions, enum xlate_error error)
+{
+    nl_msg_put_u32(odp_actions, OVS_ACTION_ATTR_DROP, error);
+}
+
+static void
 put_ct_helper(struct xlate_ctx *ctx,
               struct ofpbuf *odp_actions, struct ofpact_conntrack *ofc)
 {
@@ -5978,6 +6055,29 @@ put_ct_helper(struct xlate_ctx *ctx,
             break;
         }
     }
+}
+
+static void
+put_ct_timeout(struct ofpbuf *odp_actions, const struct dpif_backer *backer,
+               const struct flow *flow, struct flow_wildcards *wc,
+               uint16_t zone_id)
+{
+    bool unwildcard;
+    char *tp_name = NULL;
+
+    if (ofproto_dpif_ct_zone_timeout_policy_get_name(backer, zone_id,
+            ntohs(flow->dl_type), flow->nw_proto, &tp_name, &unwildcard)) {
+        nl_msg_put_string(odp_actions, OVS_CT_ATTR_TIMEOUT, tp_name);
+
+        if (unwildcard) {
+            /* The underlying datapath requires separate timeout
+             * policies for different Ethertypes and IP protocols.  We
+             * don't need to unwildcard 'wc->masks.dl_type' since that
+             * field is always unwildcarded in megaflows. */
+            memset(&wc->masks.nw_proto, 0xff, sizeof wc->masks.nw_proto);
+        }
+    }
+    free(tp_name);
 }
 
 static void
@@ -6069,6 +6169,10 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc,
         if (ctx->xbridge->support.ct_eventmask) {
             nl_msg_put_u32(ctx->odp_actions, OVS_CT_ATTR_EVENTMASK,
                            OVS_CT_EVENTMASK_DEFAULT);
+        }
+        if (ctx->xbridge->support.ct_timeout) {
+            put_ct_timeout(ctx->odp_actions, ctx->xbridge->ofproto->backer,
+                           &ctx->xin->flow, ctx->wc, zone);
         }
     }
     nl_msg_put_u16(ctx->odp_actions, OVS_CT_ATTR_ZONE, zone);
@@ -7276,6 +7380,26 @@ xlate_wc_finish(struct xlate_ctx *ctx)
         ctx->wc->masks.tp_src = 0;
         ctx->wc->masks.tp_dst = 0;
     }
+
+    /* Clear flow wildcard bits for fields which are not present
+     * in the original packet header. These wildcards may get set
+     * due to push/set_field actions. This results into frequent
+     * invalidation of datapath flows by revalidator thread. */
+
+    /* Clear mpls label wc bits if original packet is non-mpls. */
+    if (!eth_type_mpls(ctx->xin->upcall_flow->dl_type)) {
+        for (i = 0; i < FLOW_MAX_MPLS_LABELS; i++) {
+            ctx->wc->masks.mpls_lse[i] = 0;
+        }
+    }
+    /* Clear vlan header wc bits if original packet does not have
+     * vlan header. */
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        if (!eth_type_vlan(ctx->xin->upcall_flow->vlans[i].tpid)) {
+            ctx->wc->masks.vlans[i].tpid = 0;
+            ctx->wc->masks.vlans[i].tci = 0;
+        }
+    }
 }
 
 /* Translates the flow, actions, or rule in 'xin' into datapath actions in
@@ -7412,7 +7536,8 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
         /* Restore pipeline metadata. May change flow's in_port and other
          * metadata to the values that existed when freezing was triggered. */
-        frozen_metadata_to_flow(&state->metadata, flow);
+        frozen_metadata_to_flow(&ctx.xbridge->ofproto->up,
+                                &state->metadata, flow);
 
         /* Restore stack, if any. */
         if (state->stack) {
@@ -7464,14 +7589,10 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             ctx.error = XLATE_INVALID_TUNNEL_METADATA;
             goto exit;
         }
-    } else if (!flow->tunnel.metadata.tab || xin->frozen_state) {
+    } else if (!flow->tunnel.metadata.tab) {
         /* If the original flow did not come in on a tunnel, then it won't have
          * FLOW_TNL_F_UDPIF set. However, we still need to have a metadata
          * table in case we generate tunnel actions. */
-        /* If the translation is from a frozen state, we use the latest
-         * TLV map to avoid segmentation fault in case the old TLV map is
-         * replaced by a new one.
-         * XXX: It is better to abort translation if the table is changed. */
         flow->tunnel.metadata.tab = ofproto_get_tun_tab(
             &ctx.xbridge->ofproto->up);
     }
@@ -7502,7 +7623,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             ctx.xin->resubmit_stats, &ctx.table_id,
             flow->in_port.ofp_port, true, true, ctx.xin->xcache);
         if (ctx.xin->resubmit_stats) {
-            rule_dpif_credit_stats(ctx.rule, ctx.xin->resubmit_stats);
+            rule_dpif_credit_stats(ctx.rule, ctx.xin->resubmit_stats, false);
         }
         if (ctx.xin->xcache) {
             struct xc_entry *entry;
@@ -7551,8 +7672,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             compose_ipfix_action(&ctx, ODPP_NONE);
         }
         size_t sample_actions_len = ctx.odp_actions->size;
+        bool ecn_drop = !tnl_process_ecn(flow);
 
-        if (tnl_process_ecn(flow)
+        if (!ecn_drop
             && (!in_port || may_receive(in_port, &ctx))) {
             const struct ofpact *ofpacts;
             size_t ofpacts_len;
@@ -7584,6 +7706,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
                 ctx.odp_actions->size = sample_actions_len;
                 ctx_cancel_freeze(&ctx);
                 ofpbuf_clear(&ctx.action_set);
+                ctx.error = XLATE_FORWARDING_DISABLED;
             }
 
             if (!ctx.freezing) {
@@ -7592,6 +7715,8 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             if (ctx.freezing) {
                 finish_freezing(&ctx);
             }
+        } else if (ecn_drop) {
+            ctx.error = XLATE_CONGESTION_DROP;
         }
 
         /* Output only fully processed packets. */
@@ -7697,6 +7822,21 @@ exit:
             ofpbuf_clear(xin->odp_actions);
         }
     }
+
+    /* Install drop action if datapath supports explicit drop action. */
+    if (xin->odp_actions && !xin->odp_actions->size &&
+        ovs_explicit_drop_action_supported(ctx.xbridge->ofproto)) {
+        put_drop_action(xin->odp_actions, ctx.error);
+    }
+
+    /* Since congestion drop and forwarding drop are not exactly
+     * translation error, we are resetting the translation error.
+     */
+    if (ctx.error == XLATE_CONGESTION_DROP ||
+        ctx.error == XLATE_FORWARDING_DISABLED) {
+        ctx.error = XLATE_OK;
+    }
+
     return ctx.error;
 }
 

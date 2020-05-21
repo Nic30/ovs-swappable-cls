@@ -3,7 +3,7 @@
 set -o errexit
 set -x
 
-CFLAGS=""
+CFLAGS_FOR_OVS="-g -O2"
 SPARSE_FLAGS=""
 EXTRA_OPTS="--enable-Werror"
 TARGET="x86_64-native-linuxapp-gcc"
@@ -31,12 +31,14 @@ function install_kernel()
              sed 's/.*\..*\.\(.*\)/\1/' | sort -h | tail -1)
     version="${1}.${lo_ver}"
 
+    rm -rf index* linux-*
+
     url="${base_url}/linux-${version}.tar.xz"
     # Download kernel sources. Try direct link on CDN failure.
     wget ${url} || wget ${url} || wget ${url/cdn/www}
 
     tar xvf linux-${version}.tar.xz > /dev/null
-    cd linux-${version}
+    pushd linux-${version}
     make allmodconfig
 
     # Cannot use CONFIG_KCOV: -fsanitize-coverage=trace-pc is not supported by compiler
@@ -58,23 +60,57 @@ function install_kernel()
         make net/bridge/
     fi
 
-    EXTRA_OPTS="${EXTRA_OPTS} --with-linux=$(pwd)"
-    echo "Installed kernel source in $(pwd)"
-    cd ..
+    if [ "$AFXDP" ]; then
+        sudo make headers_install INSTALL_HDR_PATH=/usr
+        pushd tools/lib/bpf/
+        # Bulding with gcc because there are some issues in make files
+        # that breaks building libbpf with clang on Travis.
+        CC=gcc sudo make install
+        CC=gcc sudo make install_headers
+        sudo ldconfig
+        popd
+        # The Linux kernel defines __always_inline in stddef.h (283d7573), and
+        # sys/cdefs.h tries to re-define it.  Older libc-dev package in xenial
+        # doesn't have a fix for this issue.  Applying it manually.
+        sudo sed -i '/^# define __always_inline .*/i # undef __always_inline' \
+                    /usr/include/x86_64-linux-gnu/sys/cdefs.h || true
+        EXTRA_OPTS="${EXTRA_OPTS} --enable-afxdp"
+    else
+        EXTRA_OPTS="${EXTRA_OPTS} --with-linux=$(pwd)"
+        echo "Installed kernel source in $(pwd)"
+    fi
+    popd
 }
 
 function install_dpdk()
 {
-    if [ "${1##refs/*/}" != "${1}" ]; then
+    local DPDK_VER=$1
+    local VERSION_FILE="dpdk-dir/travis-dpdk-cache-version"
+
+    if [ "${DPDK_VER##refs/*/}" != "${DPDK_VER}" ]; then
+        # Avoid using cache for git tree build.
+        rm -rf dpdk-dir
+
         DPDK_GIT=${DPDK_GIT:-https://dpdk.org/git/dpdk}
-        git clone --single-branch $DPDK_GIT dpdk-git -b "${1##refs/*/}"
-        cd dpdk-git
+        git clone --single-branch $DPDK_GIT dpdk-dir -b "${DPDK_VER##refs/*/}"
+        pushd dpdk-dir
         git log -1 --oneline
     else
+        if [ -f "${VERSION_FILE}" ]; then
+            VER=$(cat ${VERSION_FILE})
+            if [ "${VER}" = "${DPDK_VER}" ]; then
+                EXTRA_OPTS="${EXTRA_OPTS} --with-dpdk=$(pwd)/dpdk-dir/build"
+                echo "Found cached DPDK ${VER} build in $(pwd)/dpdk-dir"
+                return
+            fi
+        fi
+        # No cache or version mismatch.
+        rm -rf dpdk-dir
         wget https://fast.dpdk.org/rel/dpdk-$1.tar.xz
         tar xvf dpdk-$1.tar.xz > /dev/null
         DIR_NAME=$(tar -tf dpdk-$1.tar.xz | head -1 | cut -f1 -d"/")
-        cd $DIR_NAME
+        mv ${DIR_NAME} dpdk-dir
+        pushd dpdk-dir
     fi
 
     make config CC=gcc T=$TARGET
@@ -88,15 +124,39 @@ function install_dpdk()
     sed -i '/CONFIG_RTE_EAL_IGB_UIO=y/s/=y/=n/' build/.config
     sed -i '/CONFIG_RTE_KNI_KMOD=y/s/=y/=n/' build/.config
 
+    # Enable pdump support in DPDK.
+    sed -i '/CONFIG_RTE_LIBRTE_PMD_PCAP=n/s/=n/=y/' build/.config
+    sed -i '/CONFIG_RTE_LIBRTE_PDUMP=n/s/=n/=y/' build/.config
+
     make -j4 CC=gcc EXTRA_CFLAGS='-fPIC'
     EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=$(pwd)/build"
     echo "Installed DPDK source in $(pwd)"
-    cd ..
+    popd
+    echo "${DPDK_VER}" > ${VERSION_FILE}
 }
 
 function configure_ovs()
 {
-    ./boot.sh && ./configure $* || { cat config.log; exit 1; }
+    ./boot.sh
+    ./configure CFLAGS="${CFLAGS_FOR_OVS}" $* || { cat config.log; exit 1; }
+}
+
+function build_ovs()
+{
+    local KERNEL=$1
+
+    configure_ovs $OPTS
+    make selinux-policy
+
+    # Only build datapath if we are testing kernel w/o running testsuite and
+    # AF_XDP support.
+    if [ "${KERNEL}" ] && ! [ "$AFXDP" ]; then
+        pushd datapath
+        make -j4
+        popd
+    else
+        make -j4 || { cat config.log; exit 1; }
+    fi
 }
 
 if [ "$KERNEL" ]; then
@@ -105,26 +165,35 @@ fi
 
 if [ "$DPDK" ] || [ "$DPDK_SHARED" ]; then
     if [ -z "$DPDK_VER" ]; then
-        DPDK_VER="18.11.2"
+        DPDK_VER="19.11"
     fi
     install_dpdk $DPDK_VER
+    # Enable pdump support in OVS.
+    EXTRA_OPTS="${EXTRA_OPTS} --enable-dpdk-pdump"
     if [ "$CC" = "clang" ]; then
         # Disregard cast alignment errors until DPDK is fixed
-        CFLAGS="$CFLAGS -Wno-cast-align"
+        CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} -Wno-cast-align"
     fi
 fi
 
-OPTS="$EXTRA_OPTS $*"
-
 if [ "$CC" = "clang" ]; then
-    export OVS_CFLAGS="$CFLAGS -Wno-error=unused-command-line-argument"
-elif [[ $BUILD_ENV =~ "-m32" ]]; then
-    # Disable sparse for 32bit builds on 64bit machine
-    export OVS_CFLAGS="$CFLAGS $BUILD_ENV"
+    CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} -Wno-error=unused-command-line-argument"
+elif [ "$M32" ]; then
+    # Not using sparse for 32bit builds on 64bit machine.
+    # Adding m32 flag directly to CC to avoid any posiible issues with API/ABI
+    # difference on 'configure' and 'make' stages.
+    export CC="$CC -m32"
 else
-    OPTS="$OPTS --enable-sparse"
-    export OVS_CFLAGS="$CFLAGS $BUILD_ENV $SPARSE_FLAGS"
+    OPTS="--enable-sparse"
+    if [ "$AFXDP" ]; then
+        # netdev-afxdp uses memset for 64M for umem initialization.
+        SPARSE_FLAGS="${SPARSE_FLAGS} -Wno-memcpy-max-count"
+    fi
+    CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} ${SPARSE_FLAGS}"
 fi
+
+save_OPTS="${OPTS} $*"
+OPTS="${EXTRA_OPTS} ${save_OPTS}"
 
 if [ "$TESTSUITE" ]; then
     # 'distcheck' will reconfigure with required options.
@@ -132,20 +201,27 @@ if [ "$TESTSUITE" ]; then
     configure_ovs
 
     export DISTCHECK_CONFIGURE_FLAGS="$OPTS"
-    if ! make distcheck TESTSUITEFLAGS=-j4 RECHECK=yes; then
+    if ! make distcheck CFLAGS="${CFLAGS_FOR_OVS}" \
+         TESTSUITEFLAGS=-j4 RECHECK=yes; then
         # testsuite.log is necessary for debugging.
-        cat */_build/tests/testsuite.log
+        cat */_build/sub/tests/testsuite.log
         exit 1
     fi
 else
-    configure_ovs $OPTS
-    make selinux-policy
-
-    # Only build datapath if we are testing kernel w/o running testsuite
-    if [ "$KERNEL" ]; then
-        cd datapath
+    if [ -z "${KERNEL_LIST}" ]; then build_ovs ${KERNEL};
+    else
+        save_EXTRA_OPTS="${EXTRA_OPTS}"
+        for KERNEL in ${KERNEL_LIST}; do
+            echo "=============================="
+            echo "Building with kernel ${KERNEL}"
+            echo "=============================="
+            EXTRA_OPTS="${save_EXTRA_OPTS}"
+            install_kernel ${KERNEL}
+            OPTS="${EXTRA_OPTS} ${save_OPTS}"
+            build_ovs ${KERNEL}
+            make distclean
+        done
     fi
-    make -j4
 fi
 
 exit 0

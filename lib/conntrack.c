@@ -76,6 +76,11 @@ enum ct_alg_ctl_type {
     CT_ALG_CTL_SIP,
 };
 
+struct zone_limit {
+    struct hmap_node node;
+    struct conntrack_zone_limit czl;
+};
+
 static bool conn_key_extract(struct conntrack *, struct dp_packet *,
                              ovs_be16 dl_type, struct conn_lookup_ctx *,
                              uint16_t zone);
@@ -305,16 +310,124 @@ conntrack_init(void)
     for (unsigned i = 0; i < ARRAY_SIZE(ct->exp_lists); i++) {
         ovs_list_init(&ct->exp_lists[i]);
     }
+    hmap_init(&ct->zone_limits);
+    ct->zone_limit_seq = 0;
     ovs_mutex_unlock(&ct->ct_lock);
 
     ct->hash_basis = random_uint32();
     atomic_count_init(&ct->n_conn, 0);
     atomic_init(&ct->n_conn_limit, DEFAULT_N_CONN_LIMIT);
+    atomic_init(&ct->tcp_seq_chk, true);
     latch_init(&ct->clean_thread_exit);
     ct->clean_thread = ovs_thread_create("ct_clean", clean_thread_main, ct);
     ct->ipf = ipf_init();
 
     return ct;
+}
+
+static uint32_t
+zone_key_hash(int32_t zone, uint32_t basis)
+{
+    size_t hash = hash_int((OVS_FORCE uint32_t) zone, basis);
+    return hash;
+}
+
+static struct zone_limit *
+zone_limit_lookup(struct conntrack *ct, int32_t zone)
+    OVS_REQUIRES(ct->ct_lock)
+{
+    uint32_t hash = zone_key_hash(zone, ct->hash_basis);
+    struct zone_limit *zl;
+    HMAP_FOR_EACH_IN_BUCKET (zl, node, hash, &ct->zone_limits) {
+        if (zl->czl.zone == zone) {
+            return zl;
+        }
+    }
+    return NULL;
+}
+
+static struct zone_limit *
+zone_limit_lookup_or_default(struct conntrack *ct, int32_t zone)
+    OVS_REQUIRES(ct->ct_lock)
+{
+    struct zone_limit *zl = zone_limit_lookup(ct, zone);
+    return zl ? zl : zone_limit_lookup(ct, DEFAULT_ZONE);
+}
+
+struct conntrack_zone_limit
+zone_limit_get(struct conntrack *ct, int32_t zone)
+{
+    ovs_mutex_lock(&ct->ct_lock);
+    struct conntrack_zone_limit czl = {DEFAULT_ZONE, 0, 0, 0};
+    struct zone_limit *zl = zone_limit_lookup_or_default(ct, zone);
+    if (zl) {
+        czl = zl->czl;
+    }
+    ovs_mutex_unlock(&ct->ct_lock);
+    return czl;
+}
+
+static int
+zone_limit_create(struct conntrack *ct, int32_t zone, uint32_t limit)
+    OVS_REQUIRES(ct->ct_lock)
+{
+    if (zone >= DEFAULT_ZONE && zone <= MAX_ZONE) {
+        struct zone_limit *zl = xzalloc(sizeof *zl);
+        zl->czl.limit = limit;
+        zl->czl.zone = zone;
+        zl->czl.zone_limit_seq = ct->zone_limit_seq++;
+        uint32_t hash = zone_key_hash(zone, ct->hash_basis);
+        hmap_insert(&ct->zone_limits, &zl->node, hash);
+        return 0;
+    } else {
+        return EINVAL;
+    }
+}
+
+int
+zone_limit_update(struct conntrack *ct, int32_t zone, uint32_t limit)
+{
+    int err = 0;
+    ovs_mutex_lock(&ct->ct_lock);
+    struct zone_limit *zl = zone_limit_lookup(ct, zone);
+    if (zl) {
+        zl->czl.limit = limit;
+        VLOG_INFO("Changed zone limit of %u for zone %d", limit, zone);
+    } else {
+        err = zone_limit_create(ct, zone, limit);
+        if (!err) {
+            VLOG_INFO("Created zone limit of %u for zone %d", limit, zone);
+        } else {
+            VLOG_WARN("Request to create zone limit for invalid zone %d",
+                      zone);
+        }
+    }
+    ovs_mutex_unlock(&ct->ct_lock);
+    return err;
+}
+
+static void
+zone_limit_clean(struct conntrack *ct, struct zone_limit *zl)
+    OVS_REQUIRES(ct->ct_lock)
+{
+    hmap_remove(&ct->zone_limits, &zl->node);
+    free(zl);
+}
+
+int
+zone_limit_delete(struct conntrack *ct, uint16_t zone)
+{
+    ovs_mutex_lock(&ct->ct_lock);
+    struct zone_limit *zl = zone_limit_lookup(ct, zone);
+    if (zl) {
+        zone_limit_clean(ct, zl);
+        VLOG_INFO("Deleted zone limit for zone %d", zone);
+    } else {
+        VLOG_INFO("Attempted delete of non-existent zone limit: zone %d",
+                  zone);
+    }
+    ovs_mutex_unlock(&ct->ct_lock);
+    return 0;
 }
 
 static void
@@ -327,6 +440,11 @@ conn_clean_cmn(struct conntrack *ct, struct conn *conn)
 
     uint32_t hash = conn_key_hash(&conn->key, ct->hash_basis);
     cmap_remove(&ct->conns, &conn->cm_node, hash);
+
+    struct zone_limit *zl = zone_limit_lookup(ct, conn->admit_zone);
+    if (zl && zl->czl.zone_limit_seq == conn->zone_limit_seq) {
+        zl->czl.count--;
+    }
 }
 
 /* Must be called with 'conn' of 'conn_type' CT_CONN_TYPE_DEFAULT.  Also
@@ -377,6 +495,13 @@ conntrack_destroy(struct conntrack *ct)
         conn_clean_one(ct, conn);
     }
     cmap_destroy(&ct->conns);
+
+    struct zone_limit *zl;
+    HMAP_FOR_EACH_POP (zl, node, &ct->zone_limits) {
+        free(zl);
+    }
+    hmap_destroy(&ct->zone_limits);
+
     ovs_mutex_unlock(&ct->ct_lock);
     ovs_mutex_destroy(&ct->ct_lock);
 
@@ -688,7 +813,7 @@ static void
 reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
 {
     char *tail = dp_packet_tail(pkt);
-    char pad = dp_packet_l2_pad_size(pkt);
+    uint8_t pad = dp_packet_l2_pad_size(pkt);
     struct conn_key inner_key;
     const char *inner_l4 = NULL;
     uint16_t orig_l3_ofs = pkt->l3_ofs;
@@ -698,6 +823,8 @@ reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
         struct ip_header *nh = dp_packet_l3(pkt);
         struct icmp_header *icmp = dp_packet_l4(pkt);
         struct ip_header *inner_l3 = (struct ip_header *) (icmp + 1);
+        /* This call is already verified to succeed during the code path from
+         * 'conn_key_extract()' which calls 'extract_l4_icmp()'. */
         extract_l3_ipv4(&inner_key, inner_l3, tail - ((char *)inner_l3) - pad,
                         &inner_l4, false);
         pkt->l3_ofs += (char *) inner_l3 - (char *) nh;
@@ -716,9 +843,11 @@ reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
         icmp->icmp_csum = csum(icmp, tail - (char *) icmp - pad);
     } else {
         struct ovs_16aligned_ip6_hdr *nh6 = dp_packet_l3(pkt);
-        struct icmp6_error_header *icmp6 = dp_packet_l4(pkt);
+        struct icmp6_data_header *icmp6 = dp_packet_l4(pkt);
         struct ovs_16aligned_ip6_hdr *inner_l3_6 =
             (struct ovs_16aligned_ip6_hdr *) (icmp6 + 1);
+        /* This call is already verified to succeed during the code path from
+         * 'conn_key_extract()' which calls 'extract_l4_icmp6()'. */
         extract_l3_ipv6(&inner_key, inner_l3_6,
                         tail - ((char *)inner_l3_6) - pad,
                         &inner_l4);
@@ -845,6 +974,12 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
     }
 
     if (commit) {
+        struct zone_limit *zl = zone_limit_lookup_or_default(ct,
+                                                             ctx->key.zone);
+        if (zl && zl->czl.count >= zl->czl.limit) {
+            return nc;
+        }
+
         unsigned int n_conn_limit;
         atomic_read_relaxed(&ct->n_conn_limit, &n_conn_limit);
         if (atomic_count_get(&ct->n_conn) >= n_conn_limit) {
@@ -910,6 +1045,13 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
         cmap_insert(&ct->conns, &nc->cm_node, ctx->hash);
         atomic_count_inc(&ct->n_conn);
         ctx->conn = nc; /* For completeness. */
+        if (zl) {
+            nc->admit_zone = zl->czl.zone;
+            nc->zone_limit_seq = zl->czl.zone_limit_seq;
+            zl->czl.count++;
+        } else {
+            nc->admit_zone = INVALID_ZONE;
+        }
     }
 
     return nc;
@@ -968,6 +1110,9 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
             ovs_mutex_unlock(&ct->ct_lock);
             create_new_conn = true;
             break;
+        case CT_UPDATE_VALID_NEW:
+            pkt->md.ct_state |= CS_NEW;
+            break;
         default:
             OVS_NOT_REACHED();
         }
@@ -1001,11 +1146,11 @@ check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
                  struct conn **conn,
                  const struct nat_action_info_t *nat_action_info)
 {
-    if ((ctx_in->key.dl_type == htons(ETH_TYPE_IP) &&
+    if (!(pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT)) ||
+        (ctx_in->key.dl_type == htons(ETH_TYPE_IP) &&
          !pkt->md.ct_orig_tuple.ipv4.ipv4_proto) ||
         (ctx_in->key.dl_type == htons(ETH_TYPE_IPV6) &&
          !pkt->md.ct_orig_tuple.ipv6.ipv6_proto) ||
-        !(pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT)) ||
         nat_action_info) {
         return false;
     }
@@ -1085,6 +1230,46 @@ conn_update_state_alg(struct conntrack *ct, struct dp_packet *pkt,
 }
 
 static void
+set_cached_conn(const struct nat_action_info_t *nat_action_info,
+                const struct conn_lookup_ctx *ctx, struct conn *conn,
+                struct dp_packet *pkt)
+{
+    if (OVS_LIKELY(!nat_action_info)) {
+        pkt->md.conn = conn;
+        pkt->md.reply = ctx->reply;
+        pkt->md.icmp_related = ctx->icmp_related;
+    } else {
+        pkt->md.conn = NULL;
+    }
+}
+
+static void
+process_one_fast(uint16_t zone, const uint32_t *setmark,
+                 const struct ovs_key_ct_labels *setlabel,
+                 const struct nat_action_info_t *nat_action_info,
+                 struct conn *conn, struct dp_packet *pkt)
+{
+    if (nat_action_info) {
+        handle_nat(pkt, conn, zone, pkt->md.reply, pkt->md.icmp_related);
+        pkt->md.conn = NULL;
+    }
+
+    pkt->md.ct_zone = zone;
+    ovs_mutex_lock(&conn->lock);
+    pkt->md.ct_mark = conn->mark;
+    pkt->md.ct_label = conn->label;
+    ovs_mutex_unlock(&conn->lock);
+
+    if (setmark) {
+        set_mark(pkt, conn, setmark[0], setmark[1]);
+    }
+
+    if (setlabel) {
+        set_label(pkt, conn, &setlabel[0], &setlabel[1]);
+    }
+}
+
+static void
 process_one(struct conntrack *ct, struct dp_packet *pkt,
             struct conn_lookup_ctx *ctx, uint16_t zone,
             bool force, bool commit, long long now, const uint32_t *setmark,
@@ -1092,6 +1277,11 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
             const struct nat_action_info_t *nat_action_info,
             ovs_be16 tp_src, ovs_be16 tp_dst, const char *helper)
 {
+    /* Reset ct_state whenever entering a new zone. */
+    if (pkt->md.ct_state && pkt->md.ct_zone != zone) {
+        pkt->md.ct_state = 0;
+    }
+
     bool create_new_conn = false;
     conn_key_lookup(ct, &ctx->key, ctx->hash, now, &ctx->conn, &ctx->reply);
     struct conn *conn = ctx->conn;
@@ -1115,9 +1305,10 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
             conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply);
 
             if (!conn) {
-                pkt->md.ct_state |= CS_TRACKED | CS_INVALID;
+                pkt->md.ct_state |= CS_INVALID;
+                write_ct_md(pkt, zone, NULL, NULL, NULL);
                 char *log_msg = xasprintf("Missing master conn %p", rev_conn);
-                ct_print_conn_info(conn, log_msg, VLL_INFO, true, true);
+                ct_print_conn_info(rev_conn, log_msg, VLL_INFO, true, true);
                 free(log_msg);
                 return;
             }
@@ -1184,6 +1375,8 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     }
 
     handle_alg_ctl(ct, ctx, pkt, ct_alg_ctl, conn, now, !!nat_action_info);
+
+    set_cached_conn(nat_action_info, ctx, conn, pkt);
 }
 
 /* Sends the packets in '*pkt_batch' through the connection tracker 'ct'.  All
@@ -1211,14 +1404,21 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
     struct conn_lookup_ctx ctx;
 
     DP_PACKET_BATCH_FOR_EACH (i, packet, pkt_batch) {
-        if (packet->md.ct_state == CS_INVALID
-            || !conn_key_extract(ct, packet, dl_type, &ctx, zone)) {
+        struct conn *conn = packet->md.conn;
+        if (OVS_UNLIKELY(packet->md.ct_state == CS_INVALID)) {
+            write_ct_md(packet, zone, NULL, NULL, NULL);
+        } else if (conn && conn->key.zone == zone && !force
+                   && !get_alg_ctl_type(packet, tp_src, tp_dst, helper)) {
+            process_one_fast(zone, setmark, setlabel, nat_action_info,
+                             conn, packet);
+        } else if (OVS_UNLIKELY(!conn_key_extract(ct, packet, dl_type, &ctx,
+                                zone))) {
             packet->md.ct_state = CS_INVALID;
             write_ct_md(packet, zone, NULL, NULL, NULL);
-            continue;
+        } else {
+            process_one(ct, packet, &ctx, zone, force, commit, now, setmark,
+                        setlabel, nat_action_info, tp_src, tp_dst, helper);
         }
-        process_one(ct, packet, &ctx, zone, force, commit, now, setmark,
-                    setlabel, nat_action_info, tp_src, tp_dst, helper);
     }
 
     ipf_postprocess_conntrack(ct->ipf, pkt_batch, now, dl_type);
@@ -1232,6 +1432,7 @@ conntrack_clear(struct dp_packet *packet)
     /* According to pkt_metadata_init(), ct_state == 0 is enough to make all of
      * the conntrack fields invalid. */
     packet->md.ct_state = 0;
+    pkt_metadata_init_conn(&packet->md);
 }
 
 static void
@@ -1830,7 +2031,8 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
         if (hwol_bad_l3_csum) {
             ok = false;
         } else {
-            bool hwol_good_l3_csum = dp_packet_ip_checksum_valid(pkt);
+            bool hwol_good_l3_csum = dp_packet_ip_checksum_valid(pkt)
+                                     || dp_packet_hwol_is_ipv4(pkt);
             /* Validate the checksum only when hwol is not supported. */
             ok = extract_l3_ipv4(&ctx->key, l3, dp_packet_l3_size(pkt), NULL,
                                  !hwol_good_l3_csum);
@@ -1844,7 +2046,8 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
     if (ok) {
         bool hwol_bad_l4_csum = dp_packet_l4_checksum_bad(pkt);
         if (!hwol_bad_l4_csum) {
-            bool  hwol_good_l4_csum = dp_packet_l4_checksum_valid(pkt);
+            bool  hwol_good_l4_csum = dp_packet_l4_checksum_valid(pkt)
+                                      || dp_packet_hwol_tx_l4_checksum(pkt);
             /* Validate the checksum only when hwol is not supported. */
             if (extract_l4(&ctx->key, l4, dp_packet_l4_size(pkt),
                            &ctx->icmp_related, l3, !hwol_good_l4_csum,
@@ -2401,6 +2604,21 @@ conntrack_get_nconns(struct conntrack *ct, uint32_t *nconns)
 {
     *nconns = atomic_count_get(&ct->n_conn);
     return 0;
+}
+
+int
+conntrack_set_tcp_seq_chk(struct conntrack *ct, bool enabled)
+{
+    atomic_store_relaxed(&ct->tcp_seq_chk, enabled);
+    return 0;
+}
+
+bool
+conntrack_get_tcp_seq_chk(struct conntrack *ct)
+{
+    bool enabled;
+    atomic_read_relaxed(&ct->tcp_seq_chk, &enabled);
+    return enabled;
 }
 
 /* This function must be called with the ct->resources read lock taken. */
@@ -3030,8 +3248,11 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
                 }
                 if (seq_skew) {
                     ip_len = ntohs(l3_hdr->ip_tot_len) + seq_skew;
-                    l3_hdr->ip_csum = recalc_csum16(l3_hdr->ip_csum,
-                                          l3_hdr->ip_tot_len, htons(ip_len));
+                    if (!dp_packet_hwol_is_ipv4(pkt)) {
+                        l3_hdr->ip_csum = recalc_csum16(l3_hdr->ip_csum,
+                                                        l3_hdr->ip_tot_len,
+                                                        htons(ip_len));
+                    }
                     l3_hdr->ip_tot_len = htons(ip_len);
                 }
             }
@@ -3049,13 +3270,15 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     }
 
     th->tcp_csum = 0;
-    if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-        th->tcp_csum = packet_csum_upperlayer6(nh6, th, ctx->key.nw_proto,
-                           dp_packet_l4_size(pkt));
-    } else {
-        uint32_t tcp_csum = packet_csum_pseudoheader(l3_hdr);
-        th->tcp_csum = csum_finish(
-             csum_continue(tcp_csum, th, dp_packet_l4_size(pkt)));
+    if (!dp_packet_hwol_tx_l4_checksum(pkt)) {
+        if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
+            th->tcp_csum = packet_csum_upperlayer6(nh6, th, ctx->key.nw_proto,
+                               dp_packet_l4_size(pkt));
+        } else {
+            uint32_t tcp_csum = packet_csum_pseudoheader(l3_hdr);
+            th->tcp_csum = csum_finish(
+                 csum_continue(tcp_csum, th, dp_packet_l4_size(pkt)));
+        }
     }
 
     if (seq_skew) {

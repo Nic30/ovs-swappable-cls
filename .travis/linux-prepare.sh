@@ -7,6 +7,8 @@ set -ev
 # Explicitly disable sparse support for llvm because some travis
 # environments claim to have LLVM (llvm-config exists and works) but
 # linking against it fails.
+# Disabling sqlite support because sindex build fails and we don't
+# really need this utility being installed.
 git clone git://git.kernel.org/pub/scm/devel/sparse/sparse.git
 cd sparse
 # Commit bb1bf748580d ("cgcc: gendeps for -MM, -MD & -MMD too") makes

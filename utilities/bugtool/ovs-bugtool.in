@@ -1,4 +1,4 @@
-#! @PYTHON@
+#! @PYTHON3@
 
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of version 2.1 of the GNU Lesser General Public
@@ -33,8 +33,6 @@
 # or func_output().
 #
 
-from __future__ import print_function
-
 import StringIO
 import commands
 import fcntl
@@ -54,7 +52,6 @@ from subprocess import PIPE, Popen
 
 from xml.dom.minidom import getDOMImplementation, parse
 
-from six.moves import input
 warnings.filterwarnings(action="ignore", category=DeprecationWarning)
 
 OS_RELEASE = platform.release()

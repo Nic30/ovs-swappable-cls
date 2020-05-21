@@ -291,10 +291,11 @@ cls_rule_make_invisible_in_version(const struct cls_rule *rule,
                                    ovs_version_t remove_version)
 {
     struct cls_match *cls_match = get_cls_match_protected(rule);
+    if (cls_match) {
+        ovs_assert(remove_version >= cls_match->versions.add_version);
 
-    ovs_assert(remove_version >= cls_match->versions.add_version);
-
-    cls_match_set_remove_version(cls_match, remove_version);
+        cls_match_set_remove_version(cls_match, remove_version);
+    }
 }
 
 /* This undoes the change made by cls_rule_make_invisible_in_version().

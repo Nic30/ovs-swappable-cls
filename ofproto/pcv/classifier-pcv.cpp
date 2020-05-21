@@ -172,7 +172,11 @@ struct pcv_cls_cursor pcv_cls_cursor_start(const struct pcv_classifier * cls,
     auto priv = new pcv_cls_cursor_pos;
     priv->pos = it;
     c.pos = reinterpret_cast<void*>(priv);
-    c.rule = it->first;
+    if (it != p->to_pcv_rule.end()) {
+    	c.rule = it->first;
+    } else {
+    	c.rule = nullptr;
+    }
     c.target = target;
     return c;
 }
@@ -188,6 +192,9 @@ void pcv_cls_cursor_advance(struct pcv_cls_cursor * cur) {
         return;
     } else {
         ++it->pos;
-        cur->rule = it->pos->first;
+        if (it->pos == p->to_pcv_rule.end())
+        	cur->rule = nullptr;
+        else
+        	cur->rule = it->pos->first;
     }
 }

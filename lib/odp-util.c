@@ -44,6 +44,7 @@
 #include "openvswitch/vlog.h"
 #include "openvswitch/match.h"
 #include "odp-netlink-macros.h"
+#include "csum.h"
 
 VLOG_DEFINE_THIS_MODULE(odp_util);
 
@@ -140,6 +141,7 @@ odp_action_len(uint16_t type)
     case OVS_ACTION_ATTR_PUSH_NSH: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_POP_NSH: return 0;
     case OVS_ACTION_ATTR_CHECK_PKT_LEN: return ATTR_LEN_VARIABLE;
+    case OVS_ACTION_ATTR_DROP: return sizeof(uint32_t);
 
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -930,6 +932,8 @@ static const struct nl_policy ovs_conntrack_policy[] = {
     [OVS_CT_ATTR_HELPER] = { .type = NL_A_STRING, .optional = true,
                              .min_len = 1, .max_len = 16 },
     [OVS_CT_ATTR_NAT] = { .type = NL_A_UNSPEC, .optional = true },
+    [OVS_CT_ATTR_TIMEOUT] = { .type = NL_A_STRING, .optional = true,
+                              .min_len = 1, .max_len = 32 },
 };
 
 static void
@@ -941,7 +945,7 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
         ovs_32aligned_u128 mask;
     } *label;
     const uint32_t *mark;
-    const char *helper;
+    const char *helper, *timeout;
     uint16_t zone;
     bool commit, force;
     const struct nlattr *nat;
@@ -957,10 +961,12 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
     mark = a[OVS_CT_ATTR_MARK] ? nl_attr_get(a[OVS_CT_ATTR_MARK]) : NULL;
     label = a[OVS_CT_ATTR_LABELS] ? nl_attr_get(a[OVS_CT_ATTR_LABELS]): NULL;
     helper = a[OVS_CT_ATTR_HELPER] ? nl_attr_get(a[OVS_CT_ATTR_HELPER]) : NULL;
+    timeout = a[OVS_CT_ATTR_TIMEOUT] ?
+                nl_attr_get(a[OVS_CT_ATTR_TIMEOUT]) : NULL;
     nat = a[OVS_CT_ATTR_NAT];
 
     ds_put_format(ds, "ct");
-    if (commit || force || zone || mark || label || helper || nat) {
+    if (commit || force || zone || mark || label || helper || timeout || nat) {
         ds_put_cstr(ds, "(");
         if (commit) {
             ds_put_format(ds, "commit,");
@@ -982,6 +988,9 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
         }
         if (helper) {
             ds_put_format(ds, "helper=%s,", helper);
+        }
+        if (timeout) {
+            ds_put_format(ds, "timeout=%s", timeout);
         }
         if (nat) {
             format_odp_ct_nat(ds, nat);
@@ -1229,6 +1238,9 @@ format_odp_action(struct ds *ds, const struct nlattr *a,
         break;
     case OVS_ACTION_ATTR_CHECK_PKT_LEN:
         format_odp_check_pkt_len_action(ds, a, portno_names);
+        break;
+    case OVS_ACTION_ATTR_DROP:
+        ds_put_cstr(ds, "drop");
         break;
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -1482,7 +1494,7 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     struct gre_base_hdr *greh;
     struct erspan_base_hdr *ersh;
     struct erspan_md2 *md2;
-    uint16_t gre_proto, gre_flags, dl_type, udp_src, udp_dst, csum, sid;
+    uint16_t gre_proto, gre_flags, dl_type, udp_src, udp_dst, udp_csum, sid;
     ovs_be32 sip, dip;
     uint32_t tnl_type = 0, header_len = 0, ip_len = 0, erspan_idx = 0;
     void *l3, *l4;
@@ -1516,6 +1528,7 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     if (eth->eth_type == htons(ETH_TYPE_IP)) {
         /* IPv4 */
         uint16_t ip_frag_off;
+        memset(ip, 0, sizeof(*ip));
         if (!ovs_scan_len(s, &n, "ipv4(src="IP_SCAN_FMT",dst="IP_SCAN_FMT",proto=%"SCNi8
                           ",tos=%"SCNi8",ttl=%"SCNi8",frag=0x%"SCNx16"),",
                           IP_SCAN_ARGS(&sip),
@@ -1527,7 +1540,9 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
         put_16aligned_be32(&ip->ip_src, sip);
         put_16aligned_be32(&ip->ip_dst, dip);
         ip->ip_frag_off = htons(ip_frag_off);
+        ip->ip_ihl_ver = IP_IHL_VER(5, 4);
         ip_len = sizeof *ip;
+        ip->ip_csum = csum(ip, ip_len);
     } else {
         char sip6_s[IPV6_SCAN_LEN + 1];
         char dip6_s[IPV6_SCAN_LEN + 1];
@@ -1556,13 +1571,13 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     udp = (struct udp_header *) l4;
     greh = (struct gre_base_hdr *) l4;
     if (ovs_scan_len(s, &n, "udp(src=%"SCNi16",dst=%"SCNi16",csum=0x%"SCNx16"),",
-                     &udp_src, &udp_dst, &csum)) {
+                     &udp_src, &udp_dst, &udp_csum)) {
         uint32_t vx_flags, vni;
 
         udp->udp_src = htons(udp_src);
         udp->udp_dst = htons(udp_dst);
         udp->udp_len = 0;
-        udp->udp_csum = htons(csum);
+        udp->udp_csum = htons(udp_csum);
 
         if (ovs_scan_len(s, &n, "vxlan(flags=0x%"SCNx32",vni=0x%"SCNx32"))",
                          &vx_flags, &vni)) {
@@ -1628,6 +1643,7 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
         ovs_16aligned_be32 *options = (ovs_16aligned_be32 *) (greh + 1);
 
         if (greh->flags & htons(GRE_CSUM)) {
+            uint16_t csum;
             if (!ovs_scan_len(s, &n, ",csum=0x%"SCNx16, &csum)) {
                 return -EINVAL;
             }
@@ -1909,8 +1925,8 @@ parse_conntrack_action(const char *s_, struct ofpbuf *actions)
     const char *s = s_;
 
     if (ovs_scan(s, "ct")) {
-        const char *helper = NULL;
-        size_t helper_len = 0;
+        const char *helper = NULL, *timeout = NULL;
+        size_t helper_len = 0, timeout_len = 0;
         bool commit = false;
         bool force_commit = false;
         uint16_t zone = 0;
@@ -1987,6 +2003,16 @@ find_end:
                     s += helper_len;
                     continue;
                 }
+                if (ovs_scan(s, "timeout=%n", &n)) {
+                    s += n;
+                    timeout_len = strcspn(s, delimiters_end);
+                    if (!timeout_len || timeout_len > 31) {
+                        return -EINVAL;
+                    }
+                    timeout = s;
+                    s += timeout_len;
+                    continue;
+                }
 
                 n = scan_ct_nat(s, &nat_params);
                 if (n > 0) {
@@ -2026,6 +2052,10 @@ find_end:
         if (helper) {
             nl_msg_put_string__(actions, OVS_CT_ATTR_HELPER, helper,
                                 helper_len);
+        }
+        if (timeout) {
+            nl_msg_put_string__(actions, OVS_CT_ATTR_TIMEOUT, timeout,
+                                timeout_len);
         }
         if (have_nat) {
             nl_msg_put_ct_nat(&nat_params, actions);
@@ -2549,6 +2579,7 @@ odp_actions_from_string(const char *s, const struct simap *port_names,
     size_t old_size;
 
     if (!strcasecmp(s, "drop")) {
+        nl_msg_put_u32(actions, OVS_ACTION_ATTR_DROP, XLATE_OK);
         return 0;
     }
 
@@ -3576,8 +3607,8 @@ format_odp_tun_vxlan_opt(const struct nlattr *attr,
 
 static void
 format_odp_tun_erspan_opt(const struct nlattr *attr,
-                         const struct nlattr *mask_attr, struct ds *ds,
-                         bool verbose)
+                          const struct nlattr *mask_attr, struct ds *ds,
+                          bool verbose)
 {
     const struct erspan_metadata *opts, *mask;
     uint8_t ver, ver_ma, dir, dir_ma, hwid, hwid_ma;
@@ -6001,26 +6032,28 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
     if (flow->ct_nw_proto) {
         if (parms->support.ct_orig_tuple
             && flow->dl_type == htons(ETH_TYPE_IP)) {
-            struct ovs_key_ct_tuple_ipv4 ct = {
-                data->ct_nw_src,
-                data->ct_nw_dst,
-                data->ct_tp_src,
-                data->ct_tp_dst,
-                data->ct_nw_proto,
-            };
-            nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4, &ct,
-                              sizeof ct);
+            struct ovs_key_ct_tuple_ipv4 *ct;
+
+            /* 'struct ovs_key_ct_tuple_ipv4' has padding, clear it. */
+            ct = nl_msg_put_unspec_zero(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4,
+                                        sizeof *ct);
+            ct->ipv4_src = data->ct_nw_src;
+            ct->ipv4_dst = data->ct_nw_dst;
+            ct->src_port = data->ct_tp_src;
+            ct->dst_port = data->ct_tp_dst;
+            ct->ipv4_proto = data->ct_nw_proto;
         } else if (parms->support.ct_orig_tuple6
                    && flow->dl_type == htons(ETH_TYPE_IPV6)) {
-            struct ovs_key_ct_tuple_ipv6 ct = {
-                data->ct_ipv6_src,
-                data->ct_ipv6_dst,
-                data->ct_tp_src,
-                data->ct_tp_dst,
-                data->ct_nw_proto,
-            };
-            nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6, &ct,
-                              sizeof ct);
+            struct ovs_key_ct_tuple_ipv6 *ct;
+
+            /* 'struct ovs_key_ct_tuple_ipv6' has padding, clear it. */
+            ct = nl_msg_put_unspec_zero(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6,
+                                        sizeof *ct);
+            ct->ipv6_src = data->ct_ipv6_src;
+            ct->ipv6_dst = data->ct_ipv6_dst;
+            ct->src_port = data->ct_tp_src;
+            ct->dst_port = data->ct_tp_dst;
+            ct->ipv6_proto = data->ct_nw_proto;
         }
     }
     if (parms->support.recirc) {
@@ -6180,23 +6213,24 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
                 && (!export_mask || (data->tp_src == htons(0xff)
                                      && data->tp_dst == htons(0xff)))) {
                 struct ovs_key_nd *nd_key;
-                struct ovs_key_nd_extensions *nd_ext_key;
                 nd_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_ND,
                                                     sizeof *nd_key);
                 nd_key->nd_target = data->nd_target;
                 nd_key->nd_sll = data->arp_sha;
                 nd_key->nd_tll = data->arp_tha;
 
-                /* Add ND Extensions Attr only if reserved field
+                /* Add ND Extensions Attr only if supported and reserved field
                  * or options type is set. */
-                if (data->igmp_group_ip4 != 0 ||
-                    data->tcp_flags != 0) {
-                    nd_ext_key =
-                         nl_msg_put_unspec_uninit(buf,
+                if (parms->support.nd_ext) {
+                    struct ovs_key_nd_extensions *nd_ext_key;
+
+                    if (data->igmp_group_ip4 != 0 || data->tcp_flags != 0) {
+                        nd_ext_key = nl_msg_put_unspec_uninit(buf,
                                             OVS_KEY_ATTR_ND_EXTENSIONS,
                                             sizeof *nd_ext_key);
-                    nd_ext_key->nd_reserved = data->igmp_group_ip4;
-                    nd_ext_key->nd_options_type = ntohs(data->tcp_flags);
+                        nd_ext_key->nd_reserved = data->igmp_group_ip4;
+                        nd_ext_key->nd_options_type = ntohs(data->tcp_flags);
+                    }
                 }
             }
         }
@@ -6403,11 +6437,20 @@ odp_key_to_dp_packet(const struct nlattr *key, size_t key_len,
     }
 }
 
-uint32_t
-odp_flow_key_hash(const struct nlattr *key, size_t key_len)
+/* Places the hash of the 'key_len' bytes starting at 'key' into '*hash'.
+ * Generated value has format of random UUID. */
+void
+odp_flow_key_hash(const void *key, size_t key_len, ovs_u128 *hash)
 {
-    BUILD_ASSERT_DECL(!(NLA_ALIGNTO % sizeof(uint32_t)));
-    return hash_bytes32(ALIGNED_CAST(const uint32_t *, key), key_len, 0);
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+    static uint32_t secret;
+
+    if (ovsthread_once_start(&once)) {
+        secret = random_uint32();
+        ovsthread_once_done(&once);
+    }
+    hash_bytes128(key, key_len, secret, hash);
+    uuid_set_bits_v4((struct uuid *)hash);
 }
 
 static void
