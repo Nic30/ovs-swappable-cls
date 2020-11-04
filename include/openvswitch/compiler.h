@@ -20,9 +20,12 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#ifndef __cplusplus
 #ifndef typeof
 #define typeof(x) __typeof__(x)
 #endif
+#endif
+
 
 #ifndef __has_feature
   #define __has_feature(x) 0
