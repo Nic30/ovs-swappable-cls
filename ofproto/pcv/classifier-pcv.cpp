@@ -1,4 +1,5 @@
 #include "classifier-pcv.h"
+
 #undef atomic_init
 #undef atomic_store
 #undef atomic_compare_exchange_strong_explicit
@@ -6,8 +7,41 @@
 #undef atomic_compare_exchange_weak_explicit
 #undef atomic_compare_exchange_weak
 
+
 #include "classifier-pcv-private.h"
 #include "struct_flow_conversions.h"
+
+#include "openvswitch/vlog.h"
+
+// [fixme] duplication with lib/classifier-private.h due c++ no compatibility
+struct cls_match {
+    /* Accessed by everybody. */
+    OVSRCU_TYPE(struct cls_match *) next; /* Equal, lower-priority matches. */
+    OVSRCU_TYPE(struct cls_conjunction_set *) conj_set;
+
+    /* Accessed by readers interested in wildcarding. */
+    const int priority;         /* Larger numbers are higher priorities. */
+
+    /* Accessed by all readers. */
+    struct cmap_node cmap_node; /* Within struct cls_subtable 'rules'. */
+
+    /* Rule versioning. */
+    struct versions versions;
+
+    const struct cls_rule *cls_rule;
+    /* 'flow' must be the last field. */
+};
+
+
+static inline void
+cls_match_set_remove_version(struct cls_match *rule, ovs_version_t version)
+{
+    versions_set_remove_version(&rule->versions, version);
+}
+
+
+VLOG_DEFINE_THIS_MODULE(pcv_classifier);
+
 
 pcv_classifier_priv::pcv_classifier_priv() :
         cls(struct_flow_packet_spec, struct_flow_packet_formaters,
@@ -49,8 +83,8 @@ bool pcv_classifier_set_prefix_fields(
  */
 const struct cls_rule *
 pcv_classifier_replace(struct pcv_classifier *cls, const struct cls_rule *rule,
-        ovs_version_t version __attribute__((unused)),
-        const struct cls_conjunction *conjs __attribute__((unused)),
+        ovs_version_t version,
+        const struct cls_conjunction *conjs,
         size_t n_conjs) {
     auto p = ((pcv_classifier_priv*) cls->priv);
     //auto a = p->to_pcv_rule.find(rule);
@@ -63,6 +97,11 @@ pcv_classifier_replace(struct pcv_classifier *cls, const struct cls_rule *rule,
     ovs_assert(n_conjs == 0);
     p->cls.insert(tmp);
     p->to_pcv_rule[rule] = tmp;
+    /* Make 'new' visible to lookups in the appropriate version. */
+    const struct cls_match * cls_match = reinterpret_cast<const struct cls_match *>(&rule->cls_match);
+    cls_match_set_remove_version(
+            const_cast<struct cls_match*>(cls_match),
+            version);
 
     return nullptr;
 }
@@ -80,8 +119,15 @@ bool pcv_classifier_remove(struct pcv_classifier *cls,
         const struct cls_rule *cls_rule) {
     auto p = ((pcv_classifier_priv*) cls->priv);
     auto f = p->to_pcv_rule.find(cls_rule);
-    if (f != p->to_pcv_rule.find(cls_rule)) {
+    if (f != p->to_pcv_rule.end()) {
         p->cls.remove(f->second);
+        p->to_pcv_rule.erase(f);
+        const struct cls_match *cls_match =
+                reinterpret_cast<const struct cls_match*>(&cls_rule->cls_match);
+        cls_match_set_remove_version(const_cast<struct cls_match*>(cls_match),
+        OVS_VERSION_MAX);
+        /* Mark as removed. */
+        // ovsrcu_set(&CONST_CAST(struct cls_rule *, cls_rule)->cls_match, nullptr);
         return true;
     }
     return false;
@@ -172,7 +218,12 @@ struct pcv_cls_cursor pcv_cls_cursor_start(const struct pcv_classifier * cls,
     auto priv = new pcv_cls_cursor_pos;
     priv->pos = it;
     c.pos = reinterpret_cast<void*>(priv);
-    c.rule = it->first;
+    // VLOG_WARN("to_pcv_rule.size() %"PRIu64, p->to_pcv_rule.size());
+    if (it != p->to_pcv_rule.end()) {
+        c.rule = it->first;
+    } else {
+        c.rule = nullptr;
+    }
     c.target = target;
     return c;
 }
@@ -188,6 +239,9 @@ void pcv_cls_cursor_advance(struct pcv_cls_cursor * cur) {
         return;
     } else {
         ++it->pos;
-        cur->rule = it->pos->first;
+        if (it->pos == p->to_pcv_rule.end())
+            cur->rule = nullptr;
+        else
+            cur->rule = it->pos->first;
     }
 }

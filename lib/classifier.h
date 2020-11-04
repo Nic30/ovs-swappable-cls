@@ -476,6 +476,10 @@ classifier_publish(struct classifier *cls)
     pvector_publish(&cls->subtables);
 }
 
+struct cls_match *
+cls_match_alloc(const struct cls_rule *rule, ovs_version_t version,
+                const struct cls_conjunction conj[], size_t n);
+
 #ifdef __cplusplus
 }
 #endif
