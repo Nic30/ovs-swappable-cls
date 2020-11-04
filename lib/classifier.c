@@ -83,7 +83,7 @@ cls_conjunction_set_alloc(struct cls_match *match,
     }
 }
 
-static struct cls_match *
+struct cls_match *
 cls_match_alloc(const struct cls_rule *rule, ovs_version_t version,
                 const struct cls_conjunction conj[], size_t n)
 {
