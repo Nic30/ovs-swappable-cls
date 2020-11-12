@@ -321,7 +321,7 @@ AC_DEFUN([OVS_CHECK_DPDK], [
         DPDK_AUTO_DISCOVER="true"
         PKG_CHECK_MODULES_STATIC([DPDK], [libdpdk], [
             DPDK_INCLUDE="$DPDK_CFLAGS"
-            DPDK_LIB="$DPDK_LIBS"], [
+            DPDK_LIB="$DPDK_LIBS -lrte_pmd_ring -lrte_bus_vdev"], [
             DPDK_INCLUDE="-I/usr/local/include/dpdk -I/usr/include/dpdk"
             DPDK_LIB="-ldpdk"])
         ;;
