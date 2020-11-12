@@ -79,3 +79,7 @@ testsuite.tmp.orig
 /Documentation/_build
 /.venv
 /cxx-check
+/build/
+.cproject
+.project
+.settings/
