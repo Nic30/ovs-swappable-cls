@@ -6,12 +6,9 @@
 Open vSwitch
 ============
 
-.. image:: https://travis-ci.org/openvswitch/ovs.png
-    :target: https://travis-ci.org/openvswitch/ovs
-.. image:: https://ci.appveyor.com/api/projects/status/github/openvswitch/ovs?branch=master&svg=true&retina=true
-    :target: https://ci.appveyor.com/project/blp/ovs/history
-.. image:: https://api.cirrus-ci.com/github/openvswitch/ovs.svg
-    :target: https://cirrus-ci.com/github/openvswitch/ovs
+.. image:: https://travis-ci.org/Nic30/ovs-swappable-cls.png
+    :target: https://travis-ci.org/Nic30/ovs-swappable-cls
+
 
 What is Open vSwitch?
 ---------------------
