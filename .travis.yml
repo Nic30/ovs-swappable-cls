@@ -1,3 +1,5 @@
+dist: focal
+
 language: c
 compiler:
   - gcc
@@ -11,10 +13,6 @@ cache:
     - dpdk-dir
 
 addons:
-  update: true
-     sources:
-       - sourceline: 'ppa:mhier/libboost-latest'
-       - ubuntu-toolchain-r-test
   apt:
     packages:
       - bc
@@ -30,7 +28,7 @@ addons:
       - libelf-dev
       - selinux-policy-dev
       - libunbound-dev
-      - boost1.67
+      - libboost-dev-all
       - ninja-build
       - libunwind-dev
 
