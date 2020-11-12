@@ -18,8 +18,6 @@ addons:
       - bc
       - libssl-dev
       - llvm-dev
-      - libjemalloc1
-      - libjemalloc-dev
       - libnuma-dev
       - libpcap-dev
       - python3-openssl
@@ -28,7 +26,7 @@ addons:
       - libelf-dev
       - selinux-policy-dev
       - libunbound-dev
-      - libboost-dev-all
+      - libboost-all-dev
       - ninja-build
       - libunwind-dev
 
