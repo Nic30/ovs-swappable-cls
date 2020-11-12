@@ -48,9 +48,9 @@ before_script:
   - export PATH=$PATH:$HOME/bin
 
 env:
-#  - OPTS="--disable-ssl"
-#  - TESTSUITE=1 KERNEL=3.16
-#  - TESTSUITE=1 OPTS="--enable-shared"
+  #  - OPTS="--disable-ssl"
+  #  - TESTSUITE=1 KERNEL=3.16
+  #  - TESTSUITE=1 OPTS="--enable-shared"
   - TESTSUITE=1 DPDK=1
   #- TESTSUITE=1 LIBS=-ljemalloc
   #- KERNEL_LIST="5.8 5.5 5.4 4.19"
