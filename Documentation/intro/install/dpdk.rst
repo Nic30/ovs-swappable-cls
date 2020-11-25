@@ -80,62 +80,37 @@ Install DPDK
 
 #. Configure and install DPDK using Meson
 
-   Meson is the preferred tool to build recent DPDK releases
-   as Make support is deprecated and will be removed from DPDK 20.11.
-   OVS supports DPDK Meson builds from DPDK 19.11 onwards.
-
    Build and install the DPDK library::
 
-       $ export DPDK_TARGET=x86_64-native-linuxapp-gcc
-       $ export DPDK_BUILD=$DPDK_DIR/$DPDK_TARGET
-       $ meson $DPDK_TARGET
-       $ ninja -C $DPDK_TARGET
-       $ sudo ninja -C $DPDK_TARGET install
+       $ export DPDK_BUILD=$DPDK_DIR/build
+       $ meson build
+       $ ninja -C build
+       $ sudo ninja -C build install
        $ sudo ldconfig
 
    Detailed information can be found at `DPDK documentation`_.
 
-#. (Optional) Configure DPDK as a shared library
+#. (Optional) Configure and export the DPDK shared library location
 
-   When using Meson, DPDK is built both as static and shared library.
-   So no extra configuration is required in this case.
+   Since DPDK is built both as static and shared library by default, no extra
+   configuration is required for the build.
 
-   In case of Make, DPDK can be built as either a static library or a shared
-   library.  By default, it is configured for the former. If you wish to use
-   the latter, set
-   ``CONFIG_RTE_BUILD_SHARED_LIB=y`` in ``$DPDK_DIR/config/common_base``.
+   Exporting the path to library is not necessary if the DPDK libraries are
+   system installed. For libraries installed using a prefix, export the path
+   to this library and also update the $PKG_CONFIG_PATH for use
+   before building OVS::
+
+      $ export LD_LIBRARY_PATH=/path/to/installed/DPDK/libraries
+      $ export PKG_CONFIG_PATH=/path/to/installed/".pc" file/for/DPDK
 
    .. note::
 
       Minor performance loss is expected when using OVS with a shared DPDK
       library compared to a static DPDK library.
 
-#. Configure and install DPDK using Make
-
-   Build and install the DPDK library::
-
-       $ export DPDK_TARGET=x86_64-native-linuxapp-gcc
-       $ export DPDK_BUILD=$DPDK_DIR/$DPDK_TARGET
-       $ make install T=$DPDK_TARGET DESTDIR=install
-
-#. (Optional) Export the DPDK shared library location
-
-   If DPDK was built as a shared library using Make, export the path to this
-   library for use when building OVS::
-
-       $ export LD_LIBRARY_PATH=$DPDK_DIR/x86_64-native-linuxapp-gcc/lib
-
-   In case of Meson, exporting the path to library is not necessary if
-   the DPDK libraries are system installed. For libraries installed using
-   a prefix(assuming $DPDK_INSTALL in the below case), export the path to this
-   library and also update the $PKG_CONFIG_PATH for use before building OVS::
-
-      $ export $DPDK_LIB=$DPDK_INSTALL/lib/x86_64-linux-gnu
-      $ export LD_LIBRARY_PATH=$DPDK_LIB/:$LD_LIBRARY_PATH
-      $ export PKG_CONFIG_PATH=$DPDK_LIB/pkgconfig/:$PKG_CONFIG_PATH
-
 .. _DPDK sources: http://dpdk.org/rel
-.. _DPDK documentation: https://doc.dpdk.org/guides/linux_gsg/build_dpdk.html
+.. _DPDK documentation:
+   https://doc.dpdk.org/guides-20.08/linux_gsg/build_dpdk.html
 
 Install OVS
 ~~~~~~~~~~~
@@ -156,24 +131,14 @@ has to be configured to build against the DPDK library (``--with-dpdk``).
 
 #. Configure the package using the ``--with-dpdk`` flag:
 
-   Depending on the tool used to build DPDK and the type of
-   DPDK library to use, one can configure OVS as follows:
-
-   When DPDK is built using Meson, and OVS must consume DPDK shared libraries
-   (also equivalent to leaving --with-dpdk option empty)::
-
-       $ ./configure --with-dpdk=shared
-
-   When DPDK is built using Meson, and OVS must consume DPDK static libraries::
+   If OVS must consume DPDK static libraries
+   (also equivalent to ``--with-dpdk=yes`` )::
 
        $ ./configure --with-dpdk=static
 
-   When DPDK is built using Make(for shared or static)::
+   If OVS must consume DPDK shared libraries::
 
-       $ ./configure --with-dpdk=$DPDK_BUILD
-
-   where ``DPDK_BUILD`` is the path to the built DPDK library. This can be
-   skipped if DPDK library is installed in its default location.
+       $ ./configure --with-dpdk=shared
 
    .. note::
      While ``--with-dpdk`` is required, you can pass any other configuration

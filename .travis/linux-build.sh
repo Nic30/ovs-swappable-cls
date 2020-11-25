@@ -145,12 +145,12 @@ function install_dpdk()
 
     CC=gcc meson $DPDK_OPTS build
     ninja -C build
-    sudo ninja -C build install
+    ninja -C build install
 
     # Update the library paths.
     sudo ldconfig
 
-    echo "Installed DPDK source"
+    echo "Installed DPDK source in $(pwd)"
     popd
     echo "${DPDK_VER}" > ${VERSION_FILE}
 }
